@@ -302,7 +302,7 @@ class MainActivity : Activity() {
         normalText: Int = TEXT_COLOR,
         focusedBg: Int = ACCENT,
         onFocusChanged: ((Boolean) -> Unit)? = null,
-        focusScale: Float = 1.04f,
+        focusScale: Float = Theme.FOCUS_SCALE,
     ) {
         val normal = InsetDrawable(
             GradientDrawable().apply {
@@ -575,7 +575,7 @@ class MainActivity : Activity() {
         return row
     }
 
-    private fun titleText(text: String, size: Float = 26f): TextView =
+    private fun titleText(text: String, size: Float = Theme.DISPLAY): TextView =
         TextView(this).apply {
             setText(text)
             setTextSize(size)
@@ -1483,14 +1483,21 @@ class MainActivity : Activity() {
     private fun settingGroup(title: String, items: List<Pair<String, () -> Unit>>): View {
         val box = LinearLayout(this).apply {
             orientation = LinearLayout.VERTICAL
-            setPadding(0, dp(10), 0, dp(2))
+            setPadding(0, dp(12), 0, dp(2))
         }
         box.addView(TextView(this).apply {
             text = title
-            setTextSize(Theme.CAPTION)
+            setTextSize(Theme.LABEL)
             setTextColor(Theme.MUTED)
-            setPadding(0, 0, 0, dp(6))
+            letterSpacing = 0.08f
+            setPadding(dp(4), 0, 0, dp(6))
         })
+        // 组内按钮放进一层玻璃：Aerial 的层级靠这一层，而不是给每个按钮加实色
+        val card = LinearLayout(this).apply {
+            orientation = LinearLayout.VERTICAL
+            setPadding(dp(12), dp(10), dp(12), dp(10))
+            background = Theme.rounded(this@MainActivity, Theme.GLASS_1, Theme.HAIRLINE, Theme.RADIUS_L, 1)
+        }
         items.chunked(2).forEach { pair ->
             val row = LinearLayout(this).apply { orientation = LinearLayout.HORIZONTAL }
             pair.forEach { (label, action) ->
@@ -1502,8 +1509,9 @@ class MainActivity : Activity() {
                     leftMargin = dp(10)
                 })
             }
-            box.addView(row)
+            card.addView(row)
         }
+        box.addView(card)
         return box
     }
 
@@ -2642,6 +2650,11 @@ class MainActivity : Activity() {
         currentScreen = "detail"
         lastDetailItem = item
         lastDetailData = detail
+        // 整屏 backdrop：封面放大压暗当背景，文字浮在幕布上（Aerial 的"影像优先"）
+        val backdrop = ImageView(this).apply {
+            scaleType = ImageView.ScaleType.CENTER_CROP
+            alpha = 0f
+        }
         val col = LinearLayout(this).apply {
             orientation = LinearLayout.VERTICAL
             setPadding(dp(Theme.PAGE_X), dp(Theme.PAGE_Y), dp(Theme.PAGE_X), dp(20))
@@ -2675,7 +2688,7 @@ class MainActivity : Activity() {
             orientation = LinearLayout.VERTICAL
             setPadding(dp(24), 0, 0, 0)
         }
-        val titleView = titleText(detail.info.title.ifEmpty { item.name }, Theme.DISPLAY)
+        val titleView = titleText(detail.info.title.ifEmpty { item.name }, Theme.HERO)
         // 详情页也能收进片单：长按片名（和首页/结果页同一个手势）
         runCatching {
             val libItem = MovieItem(
@@ -2738,6 +2751,16 @@ class MainActivity : Activity() {
         val coverUrl = detail.info.cover.ifEmpty { item.pic }
         if (coverUrl.isNotEmpty()) {
             imageLoader.load(coverUrl, dp(264), dp(392)) { bmp -> bmp?.let { cover.setImageBitmap(it) } }
+            // 同一张图再拉一份大图当背景：ImageLoader 有缓存，不会多打一次网络
+            imageLoader.load(coverUrl, dp(720), dp(1080)) { bmp ->
+                bmp?.let {
+                    backdrop.setImageBitmap(it)
+                    // 深色主题下 backdrop 是"幕布"（文字白字压图），
+                    // 浅色主题下必须退成"水印"：图太实会把深色文字吃掉
+                    val a = if (Theme.isLight) 0.16f else 0.55f
+                    backdrop.animate().alpha(a).setDuration(Theme.HERO_ANIM).start()
+                }
+            }
         }
 
 
@@ -2799,7 +2822,7 @@ class MainActivity : Activity() {
         col.addView(epGrid, LinearLayout.LayoutParams(
             ViewGroup.LayoutParams.MATCH_PARENT, 0, 1f))
 
-        setScreen(col)
+        setScreen(detailRoot(col, backdrop))
     }
 
     /** 从 m3u8 路径里取一个可读标签，例如 .../HD国语版/index.m3u8 → HD国语版 */
@@ -3134,6 +3157,23 @@ class MainActivity : Activity() {
     private fun formatTime(ms: Long): String {
         val total = ms / 1000
         return "%d:%02d".format(total / 60, total % 60)
+    }
+
+    /**
+     * 详情页外壳：整屏 backdrop + 底部幕布，正文压在幕布上。
+     * 幕布用 scrimBottom 从透明渐变到页面底色 —— 浅色主题下才不会有硬边。
+     */
+    private fun detailRoot(content: View, backdrop: ImageView): View = FrameLayout(this).apply {
+        setBackgroundColor(Theme.BG)
+        addView(backdrop, FrameLayout.LayoutParams(
+            ViewGroup.LayoutParams.MATCH_PARENT, ViewGroup.LayoutParams.MATCH_PARENT))
+        addView(View(this@MainActivity).apply {
+            layoutParams = FrameLayout.LayoutParams(
+                ViewGroup.LayoutParams.MATCH_PARENT, ViewGroup.LayoutParams.MATCH_PARENT)
+            background = Theme.scrimBottom(Theme.BG)
+        })
+        addView(content, FrameLayout.LayoutParams(
+            ViewGroup.LayoutParams.MATCH_PARENT, ViewGroup.LayoutParams.MATCH_PARENT))
     }
 
     /* ------------------------------------------------------------ 推荐首页 */

@@ -53,10 +53,11 @@ class ShelvesScreen(
     fun build(): View {
         val col = LinearLayout(host).apply {
             orientation = LinearLayout.VERTICAL
-            setPadding(dp(48), dp(22), dp(48), dp(18))
+            // 通栏：hero 要贴到屏幕边，横向留白交给每一行自己
+            setPadding(0, 0, 0, dp(18))
         }
         page = col
-        col.addView(header())
+        col.addView(heroBlock())
         if (store.list(null, 1).isNotEmpty()) {
             libraryView = libraryRow()
             col.addView(libraryView)
@@ -103,7 +104,7 @@ class ShelvesScreen(
 
         val box = LinearLayout(host).apply {
             orientation = LinearLayout.VERTICAL
-            setPadding(0, dp(Theme.GAP_XS), 0, dp(14))
+            setPadding(dp(48), dp(Theme.GAP_XS), dp(48), dp(14))
         }
         val head = LinearLayout(host).apply {
             orientation = LinearLayout.HORIZONTAL
@@ -112,12 +113,14 @@ class ShelvesScreen(
         }
         head.addView(TextView(host).apply {
             text = "为你推荐"
-            setTextSize(Theme.TITLE)
-            setTextColor(ink)
+            setTextSize(Theme.LABEL)
+            setTextColor(muted)
+            letterSpacing = 0.08f
         })
+        head.addView(View(host), LinearLayout.LayoutParams(0, 1, 1f))
         head.addView(TextView(host).apply {
-            text = "  · 按你的片单和播放记录挑的"
-            setTextSize(Theme.CAPTION)
+            text = "按你的片单和播放记录挑的"
+            setTextSize(Theme.LABEL)
             setTextColor(muted)
         })
         box.addView(head)
@@ -152,7 +155,7 @@ class ShelvesScreen(
         val entries = store.list(null, 14)
         val box = LinearLayout(host).apply {
             orientation = LinearLayout.VERTICAL
-            setPadding(0, dp(6), 0, dp(14))
+            setPadding(dp(48), dp(6), dp(48), dp(14))
         }
         val head = LinearLayout(host).apply {
             orientation = LinearLayout.HORIZONTAL
@@ -161,17 +164,19 @@ class ShelvesScreen(
         }
         head.addView(TextView(host).apply {
             text = "我的片单"
-            setTextSize(Theme.TITLE)
-            setTextColor(ink)
-        })
-        val counts = store.counts().filterValues { it > 0 }
-            .entries.joinToString(" · ") { "${it.key.label} ${it.value}" }
-        head.addView(TextView(host).apply {
-            text = if (counts.isEmpty()) "  · 长按海报加入" else "  · $counts"
-            setTextSize(Theme.CAPTION)
+            setTextSize(Theme.LABEL)
             setTextColor(muted)
+            letterSpacing = 0.08f
         })
         head.addView(View(host), LinearLayout.LayoutParams(0, 1, 1f))
+        val counts = store.counts().filterValues { it > 0 }
+            .entries.joinToString("  ·  ") { "${it.key.label} ${it.value}" }
+        head.addView(TextView(host).apply {
+            text = if (counts.isEmpty()) "长按海报加入" else counts
+            setTextSize(Theme.LABEL)
+            setTextColor(muted)
+            setPadding(0, 0, dp(14), 0)
+        })
         head.addView(TextView(host).apply {
             text = "查看全部 ›"
             setTextSize(14f)
@@ -206,11 +211,12 @@ class ShelvesScreen(
         return box
     }
 
+    /** 顶部导航：压在 hero 图上，ghost 形态（未选中 62% 白，聚焦才亮一条 hairline 胶囊） */
     private fun header(): View {
         val row = LinearLayout(host).apply {
             orientation = LinearLayout.HORIZONTAL
             gravity = Gravity.CENTER_VERTICAL
-            setPadding(0, 0, 0, dp(10))
+            setPadding(dp(48), dp(20), dp(36), dp(10))
         }
         row.addView(TextView(host).apply {
             text = "▶"
@@ -226,11 +232,6 @@ class ShelvesScreen(
             setTextColor(ink)
             setPadding(dp(10), 0, dp(14), 0)
         })
-        row.addView(TextView(host).apply {
-            text = "今晚看点什么"
-            setTextSize(Theme.CAPTION)
-            setTextColor(muted)
-        })
         // 顶部导航：M1 换掉旧首页时把入口一起弄丢了，电视上没有地址栏，必须有常驻入口
         row.addView(View(host), LinearLayout.LayoutParams(0, 1, 1f))
         nav.forEach { (label, action) ->
@@ -239,19 +240,143 @@ class ShelvesScreen(
         return row
     }
 
+    // ---------- hero：顶部 38% 幕布，跟着焦点换图 ----------
+
+    private var heroA: ImageView? = null
+    private var heroB: ImageView? = null
+    private var heroFrontIsA = true
+    private var heroTitle: TextView? = null
+    private var heroMeta: TextView? = null
+
+    /**
+     * 首页 hero：整块是"当前焦点内容的图像"，不是容器。
+     *
+     * 图占满 38% 屏高，底部用 [Theme.scrimBottom] 过渡到页面底色（浅色主题下过渡带更长，
+     * 否则亮底上会出现一条脏灰边），导航和标题都压在图上的暗幕里。
+     */
+    private fun heroBlock(): View {
+        val h = (host.resources.displayMetrics.heightPixels * 0.40f).toInt()
+        val frame = FrameLayout(host).apply {
+            layoutParams = LinearLayout.LayoutParams(ViewGroup.LayoutParams.MATCH_PARENT, h)
+            setBackgroundColor(Theme.BG)
+        }
+        heroA = ImageView(host).apply {
+            layoutParams = FrameLayout.LayoutParams(ViewGroup.LayoutParams.MATCH_PARENT, ViewGroup.LayoutParams.MATCH_PARENT)
+            scaleType = ImageView.ScaleType.CENTER_CROP
+            alpha = 0f
+        }
+        heroB = (heroA as ImageView).let {
+            ImageView(host).apply {
+                layoutParams = FrameLayout.LayoutParams(ViewGroup.LayoutParams.MATCH_PARENT, ViewGroup.LayoutParams.MATCH_PARENT)
+                scaleType = ImageView.ScaleType.CENTER_CROP
+                alpha = 0f
+            }
+        }
+        frame.addView(heroA)
+        frame.addView(heroB)
+        fun layer(h: Int, bg: android.graphics.drawable.Drawable, gravity: Int = Gravity.TOP) {
+            frame.addView(View(host).apply {
+                layoutParams = FrameLayout.LayoutParams(ViewGroup.LayoutParams.MATCH_PARENT, dp(h), gravity)
+                background = bg
+            })
+        }
+        // 顶部压暗给导航；底部 220dp 压成暗幕 —— **浅色主题也必须是暗的**，
+        // 白字压亮图等于没有字。最后 56dp 再淡入页面底色，接缝才不硬。
+        layer(150, Theme.scrimTop(0xCC000000.toInt()))
+        frame.addView(header(), FrameLayout.LayoutParams(ViewGroup.LayoutParams.MATCH_PARENT, ViewGroup.LayoutParams.WRAP_CONTENT))
+        val textBox = LinearLayout(host).apply {
+            orientation = LinearLayout.VERTICAL
+            setPadding(dp(48), dp(8), dp(48), dp(44))
+            // 暗幕贴在文字块上：白字必须有底，浅色主题也一样；
+            // 最后 56dp 由下面的页面色渐变吃掉接缝
+            background = Theme.scrimBottom(0xE6000000.toInt())
+        }
+        heroTitle = TextView(host).apply {
+            setTextSize(Theme.HERO)
+            setTextColor(Theme.ON_IMAGE_INK)
+            maxLines = 1
+        }
+        heroMeta = TextView(host).apply {
+            setTextSize(Theme.LABEL)
+            setTextColor(Theme.ON_IMAGE_MUTED)
+            setPadding(0, dp(2), 0, 0)
+        }
+        textBox.addView(heroTitle)
+        textBox.addView(heroMeta)
+        frame.addView(textBox, FrameLayout.LayoutParams(ViewGroup.LayoutParams.MATCH_PARENT, ViewGroup.LayoutParams.WRAP_CONTENT, Gravity.BOTTOM))
+        layer(56, Theme.scrimBottom(Theme.BG), Gravity.BOTTOM)
+        return frame
+    }
+
+    /** 焦点换了内容就把幕布换掉：220ms 交叉淡入（唯一允许超过 160ms 的动效） */
+    private fun setHero(item: MovieItem) {
+        heroTitle?.text = item.title
+        heroMeta?.text = buildString {
+            if (item.rating > 0) append("★ %.1f".format(item.rating))
+            if (item.badge.isNotEmpty()) {
+                if (isNotEmpty()) append("   ·   ")
+                append(item.badge)
+            }
+        }
+        if (item.cover.isEmpty()) return
+        val front = if (heroFrontIsA) heroA else heroB
+        val back = if (heroFrontIsA) heroB else heroA
+        if (front?.tag == item.cover || back == null) return
+        back.tag = item.cover
+        loader.load(item.cover, dp(960), dp(540)) { bmp ->
+            if (back.tag != item.cover || bmp == null) return@load
+            back.setImageBitmap(bmp)
+            back.animate().alpha(1f).setDuration(Theme.HERO_ANIM).start()
+            front?.animate()?.alpha(0f)?.setDuration(Theme.HERO_ANIM)?.start()
+            heroFrontIsA = !heroFrontIsA
+        }
+    }
+
     private fun navPill(label: String, action: () -> Unit): View = TextView(host).apply {
         text = label
-        setTextSize(Theme.BODY)
-        setTextColor(ink)
+        setTextSize(Theme.LABEL)
+        setTextColor(0xD1FFFFFF.toInt())   // 压在图上：固定 82% 白，不跟主题
         isFocusable = true
         // 触摸模式下点一下就直接触发，不要"先聚焦再点一次"
         isFocusableInTouchMode = false
         setPadding(dp(13), dp(6), dp(13), dp(6))
         setOnClickListener { action() }
-        setOnFocusChangeListener { v, f -> v.background = pill(if (f) accent else Color.TRANSPARENT, if (f) accent else Color.TRANSPARENT) }
+        setOnFocusChangeListener { v, f ->
+            v.background = if (f) Theme.rounded(host, Theme.GLASS_1, Theme.HAIRLINE, 8, 1) else null
+            (v as TextView).setTextColor(if (f) Theme.ON_IMAGE_INK else Theme.ON_IMAGE_MUTED)
+        }
         layoutParams = LinearLayout.LayoutParams(
             ViewGroup.LayoutParams.WRAP_CONTENT, ViewGroup.LayoutParams.WRAP_CONTENT,
         ).apply { leftMargin = dp(4) }
+    }
+
+    /**
+     * 行外壳：左右各 80dp 渐变，吃掉"半张海报"。
+     * 只在真正还能滚的那一侧显示 —— 停在行首时左边有渐变会把第一张海报的边啃掉。
+     */
+    private fun rowScroller(scroller: HorizontalScrollView): View {
+        val left = View(host).apply {
+            layoutParams = FrameLayout.LayoutParams(dp(80), ViewGroup.LayoutParams.MATCH_PARENT, Gravity.START)
+            background = Theme.edgeFade(true)
+            visibility = View.GONE
+        }
+        val right = View(host).apply {
+            layoutParams = FrameLayout.LayoutParams(dp(80), ViewGroup.LayoutParams.MATCH_PARENT, Gravity.END)
+            background = Theme.edgeFade(false)
+        }
+        scroller.setOnScrollChangeListener { _, x, _, _, _ ->
+            val inner = scroller.getChildAt(0) ?: return@setOnScrollChangeListener
+            left.visibility = if (x > 8) View.VISIBLE else View.GONE
+            right.visibility = if (x + scroller.width < inner.width - 8) View.VISIBLE else View.GONE
+        }
+        return FrameLayout(host).apply {
+            layoutParams = LinearLayout.LayoutParams(
+                ViewGroup.LayoutParams.MATCH_PARENT, ViewGroup.LayoutParams.WRAP_CONTENT)
+            addView(scroller, FrameLayout.LayoutParams(
+                ViewGroup.LayoutParams.MATCH_PARENT, ViewGroup.LayoutParams.WRAP_CONTENT))
+            addView(left)
+            addView(right)
+        }
     }
 
     private class Row(val shelf: Shelf, val strip: LinearLayout, val count: TextView)
@@ -261,20 +386,21 @@ class ShelvesScreen(
     private fun render(row: Row, merged: List<MovieItem>) {
         row.strip.removeAllViews()
         if (merged.isEmpty()) {
-            row.count.text = "  · 暂时取不到（稍后自动重试）"
+            row.count.text = "稍后自动重试"
             row.strip.addView(retryCell(row.shelf, row.strip, row.count))
             return
         }
-        row.count.text = "  · ${merged.size} 部"
+        row.count.text = "${merged.size} 部"
         val dominant = merged.groupingBy { it.badge }.eachCount().maxByOrNull { it.value }?.key.orEmpty()
         merged.forEach { row.strip.addView(posterCell(it, dominant)) }
+        if (heroTitle?.text.isNullOrEmpty()) merged.firstOrNull()?.let { setHero(it) }
         row.strip.addView(endCell(row.shelf))
     }
 
     private fun shelfSection(shelf: Shelf): View {
         val box = LinearLayout(host).apply {
             orientation = LinearLayout.VERTICAL
-            setPadding(0, dp(6), 0, dp(14))
+            setPadding(dp(48), dp(6), dp(48), dp(14))
         }
 
         val head = LinearLayout(host).apply {
@@ -284,16 +410,18 @@ class ShelvesScreen(
         }
         head.addView(TextView(host).apply {
             text = shelf.title
-            setTextSize(Theme.TITLE)
-            setTextColor(ink)
-        })
-        val countLabel = TextView(host).apply {
-            text = "  · 加载中"
-            setTextSize(Theme.CAPTION)
+            setTextSize(Theme.LABEL)
             setTextColor(muted)
+            letterSpacing = 0.08f
+        })
+        head.addView(View(host), LinearLayout.LayoutParams(0, 1, 1f))
+        val countLabel = TextView(host).apply {
+            text = "加载中"
+            setTextSize(Theme.LABEL)
+            setTextColor(muted)
+            setPadding(0, 0, dp(14), 0)
         }
         head.addView(countLabel)
-        head.addView(View(host), LinearLayout.LayoutParams(0, 1, 1f))
         head.addView(moreButton(shelf))
         box.addView(head)
 
@@ -305,7 +433,7 @@ class ShelvesScreen(
             isHorizontalScrollBarEnabled = false
             addView(strip)
         }
-        box.addView(scroller, LinearLayout.LayoutParams(ViewGroup.LayoutParams.MATCH_PARENT, ViewGroup.LayoutParams.WRAP_CONTENT))
+        box.addView(rowScroller(scroller))
 
         // 骨架屏：先占位，避免"加载中…"的文字闪烁
         repeat(7) { strip.addView(skeletonCell()) }
@@ -385,8 +513,9 @@ class ShelvesScreen(
 
         cell.setOnFocusChangeListener { _, focused ->
             frame.background = ring(if (focused) accent else Color.TRANSPARENT, base = Theme.POSTER_BG)
-            cell.scaleX = if (focused) 1.06f else 1f
-            cell.scaleY = if (focused) 1.06f else 1f
+            val s = if (focused) Theme.FOCUS_SCALE else 1f
+            cell.animate().scaleX(s).scaleY(s).setDuration(Theme.ANIM).start()
+            if (focused) setHero(item)
         }
         cell.setOnClickListener { onOpenTitle(item.title) }
         PosterActions.attach(host, cell, item, store) { ensureLibraryRow() }

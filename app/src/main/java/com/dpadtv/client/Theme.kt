@@ -161,14 +161,17 @@ object Theme {
     val ST_DROPPED get() = current.stDropped
 
     // ---------- 字号 ----------
-    const val DISPLAY = 26f      // 页面主标题
-    const val BRAND = 22f        // 字标
-    const val TITLE = 18f        // 区块标题 / 行标题
+    // Aerial 阶梯：40 / 20 / 15 / 13（+ 10 角标）。旧值只有这四级的变体，别再引入第五级。
+    const val HERO = 40f         // 详情页片名、首页 hero 标题
+    const val DISPLAY = 20f      // 页面标题（Aerial 的"标题小、内容大"）
+    const val BRAND = 20f        // 字标
+    const val TITLE = 20f        // 区块标题 / 卡片标题
     const val BODY = 15f         // 正文、按钮
-    const val INPUT = 18f        // 输入框
-    const val LIST = 16f         // 列表行
-    const val CAPTION = 12.5f    // 状态、计数、副标题
-    const val MICRO = 10.5f      // 角标
+    const val INPUT = 15f        // 输入框
+    const val LIST = 15f         // 列表行
+    const val CAPTION = 13f      // 元信息、计数（LABEL）
+    const val LABEL = 13f        // 大写小字标签
+    const val MICRO = 10f        // 角标
 
     // ---------- 间距（dp） ----------
     const val GAP_XS = 4
@@ -183,8 +186,10 @@ object Theme {
     const val RADIUS_L = 12
     const val POSTER_W = 146
     const val POSTER_H = 204
-    const val FOCUS_SCALE = 1.06f
+    const val FOCUS_SCALE = 1.05f     // 电视上位移会抖，只放大 5%
     const val FOCUS_STROKE = 3
+    const val ANIM = 160L             // 所有交互动效统一 160ms
+    const val HERO_ANIM = 220L        // hero 换图是氛围动效，允许长一点
 
     fun dp(ctx: Context, v: Int) = (v * ctx.resources.displayMetrics.density).toInt()
 
@@ -210,27 +215,24 @@ object Theme {
     fun glass(ctx: Context, radius: Int = RADIUS_L, level2: Boolean = false): GradientDrawable =
         rounded(ctx, if (level2) GLASS_2 else GLASS_1, HAIRLINE, radius, 1)
 
-    /** 顶部幕布：压在图上，两套主题一致 —— 否则浅色下白字就没底了。 */
-    fun scrimTop(ctx: Context, height: Int, solid: Int = SCRIM_SOLID): GradientDrawable =
-        GradientDrawable(GradientDrawable.Orientation.TOP_BOTTOM, intArrayOf(solid, 0x00000000)).apply {
-            cornerRadius = 0f
-            setSize(0, dp(ctx, height))
-        }
+    /**
+     * 顶部幕布：压在图上，两套主题一致 —— 否则浅色下白字就没底了。
+     * 渐变范围由承载它的 View 高度决定（不要 setSize，否则背景会被裁成 0 宽）。
+     */
+    fun scrimTop(solid: Int = SCRIM_SOLID): GradientDrawable =
+        GradientDrawable(GradientDrawable.Orientation.TOP_BOTTOM, intArrayOf(solid, 0x00000000))
 
     /** 底部幕布：从透明渐变到页面底，让 hero 没有硬边。 */
-    fun scrimBottom(ctx: Context, height: Int, to: Int = BG_DEEP): GradientDrawable =
-        GradientDrawable(GradientDrawable.Orientation.TOP_BOTTOM, intArrayOf(0x00000000, to)).apply {
-            cornerRadius = 0f
-            setSize(0, dp(ctx, height))
-        }
+    fun scrimBottom(to: Int = BG_DEEP): GradientDrawable =
+        GradientDrawable(GradientDrawable.Orientation.TOP_BOTTOM, intArrayOf(0x00000000, to))
 
-    /** 行左右的黑→透明渐变，吃掉"半张海报"。浅色主题要渐变到页面底色，不能用黑。 */
-    fun edgeFade(ctx: Context, width: Int = 80, fromStart: Boolean = true): GradientDrawable {
+    /** 行左右渐变，吃掉"半张海报"。浅色主题要渐变到页面底色，不能用黑。 */
+    fun edgeFade(fromStart: Boolean = true): GradientDrawable {
         val edge = (BG and 0x00FFFFFF) or (0xFF shl 24)
         return GradientDrawable(
             GradientDrawable.Orientation.LEFT_RIGHT,
             if (fromStart) intArrayOf(edge, 0x00000000) else intArrayOf(0x00000000, edge),
-        ).apply { setSize(dp(ctx, width), 0) }
+        )
     }
 
     /**

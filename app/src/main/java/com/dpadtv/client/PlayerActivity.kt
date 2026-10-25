@@ -162,7 +162,7 @@ class PlayerActivity : Activity() {
         titleText = TextView(this).apply {
             baseText = labelFor(currentIndex)
             setText(baseText)
-            setTextColor(Theme.INK)
+            setTextColor(Theme.ON_IMAGE_INK)
             setTextSize(Theme.TITLE)
             // 顶部压一层渐变：亮画面上白字会糊掉，这块"幕布"只在显示标题时出现
             background = android.graphics.drawable.GradientDrawable(
@@ -186,7 +186,7 @@ class PlayerActivity : Activity() {
             orientation = LinearLayout.HORIZONTAL
             gravity = Gravity.CENTER_VERTICAL
             setPadding(48, 20, 48, 20)
-            setBackgroundColor(0xB3000000.toInt())
+            setBackgroundColor(Theme.PLAYER_BAR)
             visibility = View.GONE
         }
         playPauseIcon = ImageView(this).apply {
@@ -198,7 +198,7 @@ class PlayerActivity : Activity() {
             layoutParams = LinearLayout.LayoutParams(0, LinearLayout.LayoutParams.WRAP_CONTENT, 1f)
         }
         timeText = TextView(this).apply {
-            setTextColor(Theme.INK)
+            setTextColor(Theme.ON_IMAGE_INK)
             setTextSize(Theme.CAPTION)
             setPadding(dp(24), 0, 0, 0)
         }
@@ -275,13 +275,13 @@ class PlayerActivity : Activity() {
         // 缓冲提示 + 网速
         bufferingText = TextView(this).apply {
             setText("缓冲中…")
-            setTextColor(Theme.INK)
+            setTextColor(Theme.ON_IMAGE_INK)
             setTextSize(Theme.TITLE)
             visibility = View.VISIBLE
         }
         speedText = TextView(this).apply {
             setText("测速中…")
-            setTextColor(Theme.MUTED)
+            setTextColor(Theme.ON_IMAGE_MUTED)
             setTextSize(Theme.CAPTION)
             setPadding(0, dp(6), 0, 0)
             visibility = View.VISIBLE
@@ -343,7 +343,7 @@ class PlayerActivity : Activity() {
                         baseText = labelFor(currentIndex)
                         if (!hasError) {
                             titleText.text = baseText
-                            titleText.setTextColor(Theme.INK)
+                            titleText.setTextColor(Theme.ON_IMAGE_INK)
                         }
                         bufferingText.visibility = View.VISIBLE
                         updateChrome()
@@ -454,7 +454,7 @@ class PlayerActivity : Activity() {
         val bmp = android.graphics.Bitmap.createBitmap(size, size, android.graphics.Bitmap.Config.ARGB_8888)
         val c = android.graphics.Canvas(bmp)
         val paint = android.graphics.Paint(android.graphics.Paint.ANTI_ALIAS_FLAG).apply {
-            color = Theme.INK
+            color = Theme.ON_IMAGE_INK
             style = android.graphics.Paint.Style.FILL
         }
         if (paused) {
@@ -531,18 +531,18 @@ class PlayerActivity : Activity() {
 
     private fun actionButton(label: String, onClick: () -> Unit): TextView = TextView(this).apply {
         text = label
-        setTextColor(Theme.INK)
+        setTextColor(Theme.ON_IMAGE_INK)
         setTextSize(Theme.BODY)
         setPadding(dp(22), dp(12), dp(22), dp(12))
         val normal = android.graphics.drawable.GradientDrawable().apply {
-            setColor(Theme.PANEL)
+            setColor(Theme.PLAYER_TRACK)
             cornerRadius = dp(8).toFloat()
         }
         // 和全站一致：焦点只加亮色描边，不换填充色（蓝底在暗场景里太跳）
         val focused = android.graphics.drawable.GradientDrawable().apply {
-            setColor(Theme.PANEL)
+            setColor(Theme.PLAYER_TRACK)
             cornerRadius = dp(8).toFloat()
-            setStroke(dp(3), Theme.ACCENT)
+            setStroke(dp(3), Theme.PLAYER_PROGRESS)
         }
         background = normal
         isFocusable = true
