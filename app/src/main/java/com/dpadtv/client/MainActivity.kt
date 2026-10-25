@@ -50,6 +50,7 @@ class MainActivity : Activity() {
 
     private lateinit var prefs: Prefs
     private lateinit var api: Api
+    private val library by lazy { LibraryStore(this) }
     private lateinit var imageLoader: ImageLoader
     private lateinit var root: FrameLayout
     private val scope = CoroutineScope(SupervisorJob() + Dispatchers.Main.immediate)
@@ -2703,10 +2704,20 @@ class MainActivity : Activity() {
             this,
             imageLoader,
             CollectionRepo(this),
+            library,
             onOpenTitle = { doSearch(it) },
             onMore = { shelf -> openShelf(shelf) },
+            onLibrary = { showLibrary() },
         )
         setScreen(screen.build())
+    }
+
+    /** 我的片单：收藏/想看/在看/看过/弃剧 */
+    private fun showLibrary() {
+        currentScreen = "library"
+        setScreen(
+            LibraryScreen(this, imageLoader, library, onOpenTitle = { doSearch(it) }, onBack = { showShelves() }).build(),
+        )
     }
 
     /** 「查看更多」：把这一行的合并结果铺成网格（M2 会加 chip 与筛选器）。 */
@@ -2717,7 +2728,7 @@ class MainActivity : Activity() {
             // 先把首页已经算好的合并结果带进去：进「查看更多」是秒开，不额外打豆瓣
             val initial = Merger.merge(shelf.refs.map { it to repo.fetch(it) }, shelf.size)
             setScreen(
-                BrowseScreen(this@MainActivity, imageLoader, repo, shelf, initial) { doSearch(it) }.build(),
+                BrowseScreen(this@MainActivity, imageLoader, repo, library, shelf, initial) { doSearch(it) }.build(),
             )
         }
     }

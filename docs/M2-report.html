@@ -1,0 +1,117 @@
+<!DOCTYPE html>
+<html lang="zh-CN">
+<head>
+<meta charset="utf-8">
+<style>
+  .w{width:1080px;font-family:inherit;color:var(--foreground);}
+  .w *{box-sizing:border-box;}
+  .mono{font-variant-numeric:tabular-nums;font-feature-settings:"tnum";}
+  .label{font-size:10.5px;letter-spacing:.14em;text-transform:uppercase;color:var(--muted-foreground);}
+  h1{font-size:24px;line-height:1.2;margin:6px 0 4px;font-weight:650;letter-spacing:-.01em;}
+  .sub{font-size:12.5px;color:var(--muted-foreground);margin:0 0 14px;}
+  .kpis{display:grid;grid-template-columns:repeat(5,1fr);gap:9px;margin:12px 0 4px;}
+  .kpi{border:1px solid var(--border);border-radius:10px;padding:9px 11px;background:var(--card);}
+  .kpi .v{font-size:18px;font-weight:650;letter-spacing:-.02em;}
+  .kpi .k{font-size:10.5px;color:var(--muted-foreground);margin-top:2px;}
+  .ok{color:var(--accent);}
+  .sec{display:flex;align-items:baseline;gap:10px;margin:20px 0 9px;}
+  .sec .n{font-size:10.5px;color:var(--accent);font-weight:600;letter-spacing:.1em;}
+  .sec h2{font-size:14.5px;margin:0;font-weight:600;}
+  .sec .hint{font-size:11px;color:var(--muted-foreground);margin-left:auto;}
+  table{width:100%;border-collapse:collapse;font-size:11.5px;}
+  th,td{text-align:left;padding:6px 8px;border-bottom:1px solid var(--border);vertical-align:top;}
+  th{font-size:10px;letter-spacing:.1em;text-transform:uppercase;color:var(--muted-foreground);font-weight:500;}
+  td.m{color:var(--muted-foreground);}
+  .chk{display:grid;grid-template-columns:1fr 1fr;gap:8px;}
+  .ci{display:flex;gap:8px;border:1px solid var(--border);border-radius:9px;padding:8px 10px;background:var(--card);font-size:11.5px;align-items:flex-start;}
+  .ci .mk{color:var(--accent);font-weight:700;}
+  .ci .d{color:var(--muted-foreground);font-size:10.5px;margin-top:2px;}
+  .warn{border:1px solid color-mix(in oklab,var(--accent) 45%,var(--border));border-radius:10px;padding:10px 12px;background:color-mix(in oklab,var(--accent) 7%,transparent);font-size:11.5px;line-height:1.6;}
+  .warn code{font-size:10.5px;color:var(--accent);}
+  .dec{display:grid;grid-template-columns:1fr 1fr;gap:9px;margin-top:4px;}
+  .q{border:1px solid var(--border);border-radius:10px;padding:11px;background:var(--card);cursor:pointer;transition:border-color .15s,transform .15s;}
+  .q:hover{border-color:color-mix(in oklab,var(--accent) 55%,var(--border));transform:translateY(-1px);}
+  .q .qt{font-size:12px;font-weight:600;margin-bottom:5px;}
+  .q .qd{font-size:11px;color:var(--muted-foreground);line-height:1.45;}
+  .q .opt{display:flex;gap:5px;margin-top:7px;flex-wrap:wrap;}
+  .opt span{font-size:10.5px;padding:2px 6px;border-radius:5px;border:1px solid var(--border);color:var(--muted-foreground);}
+  .opt span.rec{color:var(--foreground);border-color:color-mix(in oklab,var(--accent) 60%,var(--border));background:color-mix(in oklab,var(--accent) 10%,transparent);}
+  .foot{margin-top:16px;padding-top:10px;border-top:1px solid var(--border);display:flex;justify-content:space-between;font-size:10.5px;color:var(--muted-foreground);}
+</style>
+</head>
+<body>
+<div class="w">
+
+  <div class="label">Milestone Report · M2 · 2026-10-25 · 项目内进行 · 电视仍未碰</div>
+  <h1>M2 完成：chip 条 + 四维筛选 + 存为榜单，全在模拟器验过</h1>
+  <p class="sub">浏览页从「一页网格」升级成真正的榜单中心；首页依旧 3 行，一个榜也没多</p>
+
+  <div class="kpis">
+    <div class="kpi"><div class="v mono ok">50</div><div class="k">Top250 一次点开</div></div>
+    <div class="kpi"><div class="v mono ok">17</div><div class="k">筛选「2025」结果</div></div>
+    <div class="kpi"><div class="v mono ok">4</div><div class="k">筛选维度</div></div>
+    <div class="kpi"><div class="v mono ok">11</div><div class="k">JVM 单测（全绿）</div></div>
+    <div class="kpi"><div class="v mono">3</div><div class="k">commit（M0/M1/M2）</div></div>
+  </div>
+
+  <div class="sec"><span class="n">01</span><h2>这一版加了什么</h2><span class="hint"></span></div>
+  <table>
+    <tr><th style="width:22%">能力</th><th>实现方式</th><th style="width:30%">实测</th></tr>
+    <tr><td>chip 条</td><td class="m">热门 · Top250 · 奥斯卡 · 9分+ · 2025 · 华语 · 悬疑 ＋ 我的榜单 ＋ 存为榜单</td><td class="m">Top250 → 共 50 部，走首页缓存，0 请求</td></tr>
+    <tr><td>四维筛选</td><td class="m">年份 / 地区 / 类型 / 排序（评分·热门·最新 → 豆瓣 T/S/U）</td><td class="m">选 2025 → 共 17 部，海报全换</td></tr>
+    <tr><td>滚动分页</td><td class="m">start 游标，滚到底自动加载</td><td class="m">实现完成</td></tr>
+    <tr><td>存为榜单</td><td class="m">弹窗预填「电影 · 2025 · 8.5分+」，确认即存</td><td class="m">新 chip 出现并在重启后保留</td></tr>
+    <tr><td>秒开</td><td class="m">「查看更多」先带首页合并结果，再按需刷新</td><td class="m">点开即 18 部，无白屏</td></tr>
+  </table>
+
+  <div class="sec"><span class="n">02</span><h2>这一版最大的坑：豆瓣限流</h2><span class="hint">HTTP 200，但内容是拒绝</span></div>
+  <div class="warn">
+    <code>{"msg":"检测到有异常请求从您的IP发出，请登录再试!","r":1}</code><br>
+    今天被触发 <b>3 次</b>，全是并发请求导致。定下的六条纪律：<br>
+    ① 全局 <b>Mutex 串行</b>，同一时刻只有一个请求在飞　② 间隔 <b>≥ 2.5s</b>（650ms / 1.5s 都在 4–6 个请求后就被封）<br>
+    ③ 首页<b>单条流水线</b>：一行拉完再拉下一行　④ 命中即 <b>退避 10 分钟</b>，期间只读缓存，UI 明确提示<br>
+    ⑤ 失败<b>回退过期缓存</b>（宁旧不空）　⑥ 缓存键分离：首页 <code>ref.id</code>、筛选 <code>q_md5(url)</code>，各 24h
+  </div>
+
+  <div class="sec"><span class="n">03</span><h2>顺手修掉的 bug</h2><span class="hint"></span></div>
+  <div class="chk">
+    <div class="ci"><span class="mk">✓</span><div>NetworkOnMainThreadException<div class="d">suspend 不等于切线程，抓取整体包进 Dispatchers.IO</div></div></div>
+    <div class="ci"><span class="mk">✓</span><div>冷启动并发风暴<div class="d">首页改单条串行流水线，请求数不变但不再同时打出去</div></div></div>
+    <div class="ci"><span class="mk">✓</span><div>空屏兜底<div class="d">拉不到就用过期缓存，仍无则给「重试」入口</div></div></div>
+    <div class="ci"><span class="mk">✓</span><div>缓存失效<div class="d">缓存键从 ref.id 改回后，M1 的暖数据继续可用</div></div></div>
+  </div>
+
+  <div class="sec"><span class="n">04</span><h2>已知取舍</h2><span class="hint"></span></div>
+  <table>
+    <tr><td style="width:30%">模拟器点 chip 只聚焦</td><td class="m">要再按 OK 才触发；TV 遥控器本来就是「焦点 + OK」，不受影响</td></tr>
+    <tr><td>豆瓣没有奖项标签</td><td class="m">「奥斯卡」走豆列 doulist/240962（25 条/页）</td></tr>
+    <tr><td>剧集标签时有时无</td><td class="m">国产剧/美剧/韩剧/日剧 在 new_search_subjects 里不稳定，空了提示换筛选</td></tr>
+  </table>
+
+  <div class="sec"><span class="n">05</span><h2>下一步</h2><span class="hint">点一下即当回答</span></div>
+  <div class="dec">
+    <div class="q" data-hermes-send="DpadTV Pro：继续 M3 —— 收藏 / 看过（SQLite 表 + 长按快捷菜单 + 我的页）">
+      <div class="qt">继续 M3 · 收藏 / 看过</div>
+      <div class="qd">四态 + 长按 OK 菜单 + 我的页，约 1.5 人日</div>
+      <div class="opt"><span class="rec">开工 M3</span></div>
+    </div>
+    <div class="q" data-hermes-send="DpadTV Pro：先给豆瓣加一层服务端缓存 sidecar（路由上跑，24h 缓存 + 单飞），解决限流，再做 M3">
+      <div class="qt">先做豆瓣缓存层？</div>
+      <div class="qd">限流是长期隐患；sidecar 后请求量降到每天个位数</div>
+      <div class="opt"><span class="rec">先做 M3，缓存层放后面</span><span>先做 sidecar</span></div>
+    </div>
+  </div>
+
+  <div class="foot">
+    <span>commit b9fd183 · docs/M2.md 记录了限流实测</span>
+    <span class="mono">模拟器已关闭 · 电视仍是官方 1.2.0</span>
+  </div>
+
+</div>
+<script>
+  document.querySelectorAll('[data-hermes-send]').forEach(el => el.addEventListener('click', () => {
+    if (window.hermes && window.hermes.send) window.hermes.send(el.dataset.hermesSend);
+  }));
+</script>
+</body>
+</html>

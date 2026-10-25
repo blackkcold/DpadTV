@@ -31,6 +31,7 @@ class BrowseScreen(
     private val host: Activity,
     private val loader: ImageLoader,
     private val repo: CollectionRepo,
+    private val store: LibraryStore,
     private val shelf: Shelf,
     private val initial: List<MovieItem> = emptyList(),
     private val onOpenTitle: (String) -> Unit,
@@ -349,6 +350,7 @@ class BrowseScreen(
                 }
             }
             cell.setOnClickListener { onOpenTitle(item.title) }
+            PosterActions.attach(host, cell, item, store)
             cell.setOnFocusChangeListener { v, f ->
                 v.background = ring(if (f) accent else Color.TRANSPARENT)
             }

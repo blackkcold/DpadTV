@@ -29,8 +29,10 @@ class ShelvesScreen(
     private val host: Activity,
     private val loader: ImageLoader,
     private val repo: CollectionRepo,
+    private val store: LibraryStore,
     private val onOpenTitle: (String) -> Unit,
     private val onMore: (Shelf) -> Unit,
+    private val onLibrary: () -> Unit,
 ) {
 
     private val scope = CoroutineScope(SupervisorJob() + Dispatchers.Main)
@@ -41,12 +43,20 @@ class ShelvesScreen(
 
     private fun dp(v: Int) = (v * host.resources.displayMetrics.density).toInt()
 
+    private var page: LinearLayout? = null
+    private var libraryView: View? = null
+
     fun build(): View {
         val col = LinearLayout(host).apply {
             orientation = LinearLayout.VERTICAL
             setPadding(dp(48), dp(22), dp(48), dp(18))
         }
+        page = col
         col.addView(header())
+        if (store.list(null, 1).isNotEmpty()) {
+            libraryView = libraryRow()
+            col.addView(libraryView)
+        }
         Shelves.home.forEach { shelf ->
             col.addView(shelfSection(shelf))
         }
@@ -62,6 +72,67 @@ class ShelvesScreen(
             setBackgroundColor(Color.parseColor("#0b1220"))
             addView(col)
         }
+    }
+
+    /**
+     * 第一次收藏后在首页立刻长出「我的片单」行。
+     * 只做「插入」不做「重建」：重建会把焦点扔掉，电视上焦点乱跳比多等一次更难受。
+     */
+    private fun ensureLibraryRow() {
+        val p = page ?: return
+        if (libraryView != null || store.list(null, 1).isEmpty()) return
+        val row = libraryRow()
+        libraryView = row
+        p.addView(row, 1)
+    }
+
+    /** 首页第一行永远是自己攒的片单 —— 比任何公共榜都更该占这个位置 */
+    private fun libraryRow(): View {
+        val entries = store.list(null, 14)
+        val box = LinearLayout(host).apply {
+            orientation = LinearLayout.VERTICAL
+            setPadding(0, dp(6), 0, dp(14))
+        }
+        val head = LinearLayout(host).apply {
+            orientation = LinearLayout.HORIZONTAL
+            gravity = Gravity.CENTER_VERTICAL
+            setPadding(0, 0, 0, dp(8))
+        }
+        head.addView(TextView(host).apply {
+            text = "我的片单"
+            setTextSize(18f)
+            setTextColor(ink)
+        })
+        val counts = store.counts().filterValues { it > 0 }
+            .entries.joinToString(" · ") { "${it.key.label} ${it.value}" }
+        head.addView(TextView(host).apply {
+            text = if (counts.isEmpty()) "  · 长按海报加入" else "  · $counts"
+            setTextSize(12.5f)
+            setTextColor(muted)
+        })
+        head.addView(View(host), LinearLayout.LayoutParams(0, 1, 1f))
+        head.addView(TextView(host).apply {
+            text = "查看全部 ›"
+            setTextSize(14f)
+            setTextColor(muted)
+            isFocusable = true
+            isFocusableInTouchMode = true
+            setPadding(dp(14), dp(6), dp(14), dp(6))
+            setOnClickListener { onLibrary() }
+            setOnFocusChangeListener { v, f -> v.background = ring(if (f) accent else Color.TRANSPARENT) }
+        })
+        box.addView(head)
+
+        val strip = LinearLayout(host).apply {
+            orientation = LinearLayout.HORIZONTAL
+            setPadding(0, dp(2), 0, 0)
+        }
+        entries.forEach { e -> strip.addView(posterCell(e.toItem(), dominantBadge = "")) }
+        box.addView(HorizontalScrollView(host).apply {
+            isHorizontalScrollBarEnabled = false
+            addView(strip)
+        })
+        return box
     }
 
     private fun header(): View {
@@ -208,6 +279,7 @@ class ShelvesScreen(
             cell.scaleY = if (focused) 1.06f else 1f
         }
         cell.setOnClickListener { onOpenTitle(item.title) }
+        PosterActions.attach(host, cell, item, store) { ensureLibraryRow() }
 
         if (item.cover.isNotEmpty()) {
             img.tag = item.cover

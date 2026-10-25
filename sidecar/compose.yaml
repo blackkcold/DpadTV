@@ -1,0 +1,16 @@
+services:
+  douban-cache:
+    image: node:20-alpine
+    container_name: douban-cache
+    restart: unless-stopped
+    network_mode: host
+    environment:
+      PORT: "8898"
+      CACHE_DIR: /data/cache
+      TTL_SECONDS: "86400"
+      MIN_GAP_MS: "2500"
+    command: ["node", "/app/server.js"]
+    volumes:
+      - /overlay/upper/opt/docker/Configs/douban-cache:/data
+      - /overlay/upper/opt/docker/Configs/douban-cache/app:/app:ro
+    mem_limit: 128m

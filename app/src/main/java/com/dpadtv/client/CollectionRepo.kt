@@ -30,6 +30,16 @@ import java.security.MessageDigest
  */
 class CollectionRepo(private val ctx: Context) {
 
+    /**
+     * 豆瓣缓存 sidecar（路由上跑）：同一个 URL 全屋共享 24h 缓存 + 单飞 + 全局 2.5s 串行。
+     * 有它以后客户端可以放心并发，不会再被豆瓣按 IP 风控。
+     * 地址由服务器地址推导：http://192.168.0.14:8899 → http://192.168.0.14:8898
+     */
+    private val sidecar: String? = runCatching {
+        val host = java.net.URI(Prefs(ctx).serverUrl).host ?: return@runCatching null
+        "http://$host:8898"
+    }.getOrNull()
+
     private val ua =
         "Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/122.0.0.0 Safari/537.36"
 
@@ -75,6 +85,20 @@ class CollectionRepo(private val ctx: Context) {
     // ---------- 限速 + 缓存 ----------
 
     private suspend fun request(url: String): String? = gate.withLock {
+        // 1) 先走 sidecar（不受直连"风控退避"影响）（局域网，毫秒级；缓存命中时上游 0 请求）
+        if (sidecar != null && url.startsWith("https://movie.douban.com/")) {
+            val path = url.removePrefix("https://movie.douban.com")
+            val body = runCatching {
+                get(sidecar + "/douban?path=" + java.net.URLEncoder.encode(path, "UTF-8"))
+            }.getOrNull()
+            if (body != null && !body.contains("检测到有异常请求") && !body.contains("\"r\":1")) {
+                Log.i("DpadTVDouban", "sidecar ${body.length}B ${path.take(60)}")
+                return@withLock body
+            }
+            Log.w("DpadTVDouban", "sidecar 不可用，回退直连：${path.take(60)}")
+        }
+
+        // 2) 回退：直连豆瓣（限速 2.5s 是硬要求）
         if (System.currentTimeMillis() < blockedUntil) return@withLock null
         val gap = 2500 - (System.currentTimeMillis() - lastRequestAt)
         if (gap > 0) delay(gap)
