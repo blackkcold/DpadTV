@@ -1,31 +1,53 @@
 <?xml version="1.0" encoding="utf-8"?>
 <resources>
+    <!--
+      App 主题（Aerial 深色为基线）。
+
+      为什么不再依赖 values-night 限定符：主题现在由 App 内自行解析
+      （深色 / 浅色 / 按时间），系统是深是浅跟它无关，而且实测这台小米电视
+      恒报浅色且锁定。所以「对话框用哪套样式」必须在代码里按解析结果显式选：
+      MainActivity.dlg() / PlayerActivity.dlg() / BrowseScreen.dlg()。
+
+      窗口底统一 #07090C：浅色模式下最多闪一帧深色（电视启动本来先黑一下），
+      比白闪柔和得多；彻底解决要自定义 Splash，不值得。
+    -->
     <style name="AppTheme" parent="@android:style/Theme.Material.NoActionBar.Fullscreen">
-        <item name="android:windowBackground">@android:color/black</item>
-        <item name="android:colorPrimary">#0b101a</item>
+        <item name="android:windowBackground">#07090C</item>
+        <item name="android:colorPrimary">#07090C</item>
         <item name="android:colorPrimaryDark">#000000</item>
-        <item name="android:colorAccent">#38bdf8</item>
-        <item name="android:colorBackground">#0b101a</item>
-        <item name="android:textColorPrimary">#e5e7eb</item>
-        <item name="android:textColorSecondary">#94a3b8</item>
+        <item name="android:colorAccent">#A7C5FF</item>
+        <item name="android:colorBackground">#07090C</item>
+        <item name="android:textColorPrimary">#F5F7FA</item>
+        <item name="android:textColorSecondary">#9FF5F7FA</item>
         <item name="android:windowActionBar">false</item>
         <item name="android:windowNoTitle">true</item>
-        <item name="android:alertDialogTheme">@style/AppDialog</item>
+        <item name="android:alertDialogTheme">@style/AppDialogDark</item>
+    </style>
+
+    <!-- 深色对话框：玻璃二档底 + hairline，所有 AlertDialog 都走这套 -->
+    <style name="AppDialogDark" parent="@android:style/Theme.Material.Dialog.Alert">
+        <item name="android:windowBackground">@drawable/dialog_bg</item>
+        <item name="android:colorBackground">#202224</item>
+        <item name="android:textColorPrimary">#F5F7FA</item>
+        <item name="android:textColorSecondary">#9FF5F7FA</item>
+        <item name="android:colorAccent">#A7C5FF</item>
+        <item name="android:colorControlHighlight">#1AFFFFFF</item>
+        <item name="android:divider">#1FFFFFFF</item>
+        <item name="android:dividerHeight">1dp</item>
     </style>
 
     <!--
-      对话框主题：系统 Material 对话框默认是灰底，和全站深色风格不一致。
-      这里统一成「比页面稍亮一点的卡片色 + 亮蓝强调色」，
-      所有 AlertDialog（来源筛选、片源操作、输入框等）都会跟着变。
+      浅色对话框：parent 必须是 Light.Dialog.Alert —— 单选列表、输入框的默认文字色
+      都从这里来；用深色 parent 再逐项改色，在部分 ROM 上会漏成"深底深字"。
     -->
-    <style name="AppDialog" parent="@android:style/Theme.Material.Dialog.Alert">
-        <item name="android:windowBackground">@drawable/dialog_bg</item>
-        <item name="android:colorBackground">#1a2233</item>
-        <item name="android:textColorPrimary">#e5e7eb</item>
-        <item name="android:textColorSecondary">#94a3b8</item>
-        <item name="android:colorAccent">#38bdf8</item>
-        <item name="android:colorControlHighlight">#1e3a5f</item>
-        <item name="android:divider">#334155</item>
+    <style name="AppDialogLight" parent="@android:style/Theme.Material.Light.Dialog.Alert">
+        <item name="android:windowBackground">@drawable/dialog_bg_light</item>
+        <item name="android:colorBackground">#FFFFFF</item>
+        <item name="android:textColorPrimary">#0B0D10</item>
+        <item name="android:textColorSecondary">#5A5B5E</item>
+        <item name="android:colorAccent">#2C5FC4</item>
+        <item name="android:colorControlHighlight">#14000000</item>
+        <item name="android:divider">#1F000000</item>
         <item name="android:dividerHeight">1dp</item>
     </style>
 </resources>

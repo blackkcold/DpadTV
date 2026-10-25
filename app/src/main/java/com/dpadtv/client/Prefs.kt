@@ -36,6 +36,31 @@ class Prefs(ctx: Context) {
 
     fun setShelvesEnabled(v: Boolean) = sp.edit().putBoolean("shelves_enabled", v).apply()
 
+    /* ----------------------------------------------------------------- 主题 */
+
+    /**
+     * "dark" | "light" | "time"。默认深色 —— 这台电视系统恒报浅色，
+     * 默认跟系统会让更新后突然变白，所以默认值写死深色。
+     */
+    var themeMode: String
+        get() = sp.getString("theme_mode", "dark") ?: "dark"
+        set(v) = sp.edit().putString("theme_mode", v).apply()
+
+    /** 浅色时段：含开始、不含结束。默认 07:00–19:00。 */
+    var themeLightFrom: Int
+        get() = sp.getInt("theme_light_from", 7)
+        set(v) = sp.edit().putInt("theme_light_from", v.coerceIn(0, 23)).apply()
+
+    var themeLightTo: Int
+        get() = sp.getInt("theme_light_to", 19)
+        set(v) = sp.edit().putInt("theme_light_to", v.coerceIn(0, 23)).apply()
+
+    fun themeWindow() = ThemeResolver.Window(themeLightFrom, themeLightTo)
+
+    /** 按当前模式解析「此刻该不该浅色」。 */
+    fun isLightNow(): Boolean =
+        ThemeResolver.isLight(ThemeMode.of(themeMode), ThemeResolver.currentHour(), themeWindow())
+
     fun sources(): MutableList<SourceConfig> {
         val text = sp.getString("sources", "[]") ?: "[]"
         val out = ArrayList<SourceConfig>()

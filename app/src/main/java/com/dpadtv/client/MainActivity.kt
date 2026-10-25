@@ -2,7 +2,10 @@ package com.dpadtv.client
 
 import android.app.Activity
 import android.app.AlertDialog
+import android.content.BroadcastReceiver
+import android.content.Context
 import android.content.Intent
+import android.content.IntentFilter
 import android.graphics.Color
 import android.graphics.Typeface
 import android.graphics.drawable.GradientDrawable
@@ -12,6 +15,8 @@ import android.text.Spanned
 import android.text.style.ForegroundColorSpan
 import android.text.style.StyleSpan
 import android.os.Bundle
+import android.os.Handler
+import android.os.Looper
 import android.text.InputType
 import android.view.Gravity
 import android.view.KeyEvent
@@ -75,6 +80,10 @@ class MainActivity : Activity() {
     private var currentScreen = "setup"
     /** 详情页是从结果页进的？决定 BACK 是回结果（保住上下文）还是回首页 */
     private var detailFromResults = false
+    /** 换肤重画用：详情页入参缓存，避免用户改主题就丢片 */
+    private var lastDetailItem: SearchItem? = null
+    private var lastDetailData: Detail? = null
+    private var lastShelf: Shelf? = null
     /** 上一次搜索词，空态文案要用 */
     private var lastKeyword = ""
     /** 直播分组是否还没被用户手动选过（用于"默认进第一个分组"） */
@@ -84,16 +93,193 @@ class MainActivity : Activity() {
     private val REQ_PICK_JSON = 1001
     private val REQ_STORAGE = 1002
 
+    /* ------------------------------------------------------------ 主题系统 */
+
+    private val themeHandler = Handler(Looper.getMainLooper())
+    private var themeReceiver: BroadcastReceiver? = null
+    private var themeResumed = false
+    private var themePending = false
+
+    /**
+     * 时间到点的回调。
+     * 播放中 / 弹窗中 / 输入中不换肤 —— 整屏变白是这个功能唯一的事故形态。
+     */
+    private val themeTick = Runnable {
+        if (!themeFlipAllowed()) {
+            themePending = true
+            return@Runnable
+        }
+        if (syncTheme()) rerenderForTheme()
+        scheduleNextThemeFlip()
+    }
+
+    /** 返回 true 表示调色板真的变了（调用方需要重画界面）。 */
+    private fun syncTheme(force: Boolean = false): Boolean {
+        val light = prefs.isLightNow()
+        if (!force && light == Theme.isLight) return false
+        Theme.bind(light)
+        if (::root.isInitialized) root.setBackgroundColor(Theme.BG)
+        return true
+    }
+
+    private fun themeFlipAllowed(): Boolean =
+        themeResumed && busyDialog?.isShowing != true &&
+            currentScreen != "input" && currentScreen != "manualadd"
+
+    private fun scheduleNextThemeFlip() {
+        themeHandler.removeCallbacks(themeTick)
+        if (ThemeMode.of(prefs.themeMode) != ThemeMode.TIME) return
+        val delay = ThemeResolver.millisUntilNextFlip(System.currentTimeMillis(), prefs.themeWindow()) ?: return
+        // +1s：边界那一刻可能还在上一秒，宁可晚一点也不要空转
+        themeHandler.postDelayed(themeTick, delay + 1_000L)
+    }
+
+    /**
+     * 换肤后重画当前页。
+     *
+     * 只有「设置页改模式」和「时间到点且此刻在前台」两条路径会进来。
+     * detail / results / browse 用缓存入参重放 —— 用户改个主题不该丢掉正在看的片子。
+     */
+    private fun rerenderForTheme() {
+        if (!::root.isInitialized) return
+        when (currentScreen) {
+            "detail" -> {
+                val item0 = lastDetailItem
+                val detail0 = lastDetailData
+                if (item0 != null && detail0 != null) showDetail(item0, detail0) else homeRoot()
+            }
+            "results" -> if (lastResults.isNotEmpty()) showResults() else homeRoot()
+            "browse" -> {
+                val shelf0 = lastShelf
+                if (shelf0 != null) openShelf(shelf0) else showShelves()
+            }
+            "library" -> showLibrary()
+            "shelves" -> showShelves()
+            "live" -> showLive()
+            "history" -> showHistory()
+            "sources" -> showSources()
+            "serversettings" -> showServerSettings()
+            "playsettings" -> showPlaySettings()
+            "homebar" -> showHomeBarSettings()
+            "setup" -> showSetup()
+            else -> homeRoot()
+        }
+    }
+
+    private fun homeRoot() = if (prefs.shelvesEnabled()) showShelves() else showRecommend()
+
+    /** 设置页里换模式：就地重画设置页（换肤入口只在这里），焦点回到「外观」。 */
+    private fun setThemeMode(mode: ThemeMode) {
+        prefs.themeMode = when (mode) {
+            ThemeMode.LIGHT -> "light"
+            ThemeMode.TIME -> "time"
+            else -> "dark"
+        }
+        syncTheme(force = true)
+        scheduleNextThemeFlip()
+        showSetup()
+        root.post { root.findViewWithTag<View>("theme")?.requestFocus() }
+    }
+
+    /** 浅色时段：给 5 个常用窗口，别让遥控器去点 24 个小时。 */
+    private fun editThemeWindow() {
+        val presets = listOf(6 to 18, 7 to 19, 8 to 20, 9 to 21, 10 to 22)
+        val labels = presets.map { (a, b) -> "%02d:00 – %02d:00".format(a, b) }
+        val cur = presets.indexOf(prefs.themeLightFrom to prefs.themeLightTo).coerceAtLeast(0)
+        chooseOption("浅色时段（其余时间深色）", labels, cur) { i ->
+            prefs.themeLightFrom = presets[i].first
+            prefs.themeLightTo = presets[i].second
+            setThemeMode(ThemeMode.of(prefs.themeMode))
+        }
+    }
+
+    /** 「外观」分组：三个等宽按钮 + 两块真实调色板预览（选完立刻看得出效果）。 */
+    private fun themeGroup(): View {
+        val box = LinearLayout(this).apply {
+            orientation = LinearLayout.VERTICAL
+            setPadding(0, dp(10), 0, dp(2))
+        }
+        box.addView(TextView(this).apply {
+            text = "外观"
+            setTextSize(Theme.CAPTION)
+            setTextColor(Theme.MUTED)
+            setPadding(0, 0, 0, dp(6))
+        })
+        val row = LinearLayout(this).apply { orientation = LinearLayout.HORIZONTAL }
+        val mode = ThemeMode.of(prefs.themeMode)
+        listOf(ThemeMode.DARK to "深色", ThemeMode.LIGHT to "浅色", ThemeMode.TIME to "按时间").forEach { (m, label) ->
+            val tv = equalButton(label, selected = m == mode) { setThemeMode(m) }
+            tv.tag = "theme"
+            row.addView(tv)
+        }
+        box.addView(row)
+        box.addView(themePreview())
+        if (mode == ThemeMode.TIME) {
+            box.addView(
+                equalButton("浅色时段  %02d:00 – %02d:00".format(prefs.themeLightFrom, prefs.themeLightTo)) {
+                    editThemeWindow()
+                }.apply {
+                    tag = "theme"
+                    layoutParams = LinearLayout.LayoutParams(
+                        ViewGroup.LayoutParams.MATCH_PARENT, dp(46)).apply { topMargin = dp(10) }
+                },
+            )
+        }
+        return box
+    }
+
+    /** 预览：两块真调色板并排，生效中的那块描强调色边。颜色全取自令牌，不写死。 */
+    private fun themePreview(): View {
+        val row = LinearLayout(this).apply {
+            orientation = LinearLayout.HORIZONTAL
+            setPadding(0, dp(10), 0, 0)
+        }
+        listOf(Theme.DARK, Theme.LIGHT).forEach { pal ->
+            val on = pal.isLight == Theme.isLight
+            row.addView(LinearLayout(this).apply {
+                orientation = LinearLayout.VERTICAL
+                setPadding(dp(12), dp(8), dp(12), dp(8))
+                background = Theme.rounded(
+                    this@MainActivity, pal.bg,
+                    if (on) Theme.ACCENT else pal.hairline, Theme.RADIUS, if (on) 2 else 1,
+                )
+                layoutParams = LinearLayout.LayoutParams(0, ViewGroup.LayoutParams.WRAP_CONTENT, 1f)
+                    .apply { rightMargin = dp(10) }
+                addView(TextView(this@MainActivity).apply {
+                    text = (if (pal.isLight) "浅色" else "深色") + if (on) " · 生效中" else ""
+                    setTextSize(Theme.CAPTION)
+                    setTextColor(pal.ink)
+                })
+                addView(TextView(this@MainActivity).apply {
+                    text = "海报是主角，界面退到后面"
+                    setTextSize(Theme.MICRO)
+                    setTextColor(pal.muted)
+                    setPadding(0, dp(2), 0, 0)
+                })
+                addView(TextView(this@MainActivity).apply {
+                    text = "● 焦点 / 主操作"
+                    setTextSize(Theme.MICRO)
+                    setTextColor(pal.accent)
+                    setPadding(0, dp(2), 0, 0)
+                })
+            })
+        }
+        return row
+    }
+
     /* ---------------------------------------------------------- 焦点视觉 */
+
 
     // 电视上最致命的问题就是「看不出焦点在哪」。统一用高对比度方案：
     // 聚焦 = 亮蓝填充 + 深色文字 + 4dp 亮色描边 + 轻微放大。
-    private val ACCENT = Theme.ACCENT
-    private val BRIGHT = 0xFFE0F2FE.toInt()
-    private val INK = Theme.ACCENT_INK
-    private val TEXT_COLOR = Theme.INK
-    private val PANEL = 0xFF1F2937.toInt()
-    private val BRIGHTER_TEXT = 0xFFCBD5E1.toInt()
+    // 全部走 getter：换主题后这些值必须立刻跟着变。
+    // 之前是 `private val ACCENT = Theme.ACCENT`（构造时快照），换肤对已建界面无效。
+    private val ACCENT get() = Theme.ACCENT
+    private val BRIGHT get() = Theme.ON_IMAGE_INK
+    private val INK get() = Theme.ACCENT_INK
+    private val TEXT_COLOR get() = Theme.INK
+    private val PANEL get() = Theme.PANEL
+    private val BRIGHTER_TEXT get() = Theme.MUTED
 
     /**
      * 给任意可聚焦控件装上焦点视觉。
@@ -125,25 +311,9 @@ class MainActivity : Activity() {
             },
             dp(3),
         )
-        // 焦点态 = 同样的填充 + 亮色描边。描边放进背景而不是 foreground：
-        // 实测 Button 上 foreground 不渲染（放大截图里 5 个按钮完全一样），
-        // 画进背景则一定能画出来，卡片和按钮也就能共用同一套样式。
-        val focused = InsetDrawable(
-            GradientDrawable().apply {
-                setColor(normalBg)
-                cornerRadius = dp(8).toFloat()
-                setStroke(dp(5), BRIGHT)
-            },
-            dp(3),
-        )
-        val ring = InsetDrawable(
-            GradientDrawable().apply {
-                setColor(Color.TRANSPARENT)
-                cornerRadius = dp(8).toFloat()
-                setStroke(dp(4), BRIGHT)
-            },
-            dp(2),
-        )
+        // 焦点态 = 同样的填充 + **双环**（强调色 2dp + 对向 halo 2dp）。
+        // 单色环压在亮海报/亮封面上会隐形（实测 1.04~1.28:1），halo 负责在任意底色上托底。
+        val focused = Theme.focusRing(this, Theme.RADIUS, base = normalBg)
 
         // View.setBackground() 会用背景 drawable 的 padding 覆盖控件自身的 padding！
         // InsetDrawable 会报告 3dp 的 padding，于是我们设的 16dp 内边距被无声吃掉，
@@ -214,15 +384,19 @@ class MainActivity : Activity() {
         imageLoader = ImageLoader(api)
         maybeCheckUpdate()
 
+        // 主题必须比任何界面先落地：界面一建出来就会读 Theme.* 的 getter
+        syncTheme(force = true)
         root = FrameLayout(this)
-        root.setBackgroundColor(Color.parseColor("#0b101a"))
+        root.setBackgroundColor(Theme.BG)
         setContentView(root)
         hideSystemUi()
+        scheduleNextThemeFlip()
 
         if (prefs.serverUrl.isEmpty()) showSetup() else showBoot()
     }
 
     override fun onDestroy() {
+        themeHandler.removeCallbacks(themeTick)
         qrServer?.stop()
         scope.cancel()
         super.onDestroy()
@@ -231,6 +405,47 @@ class MainActivity : Activity() {
     override fun onResume() {
         super.onResume()
         hideSystemUi()
+        themeResumed = true
+        // 时间模式可能在后台跨过了边界（或刚从播放器回来）：在这里补一次
+        if (themePending || syncTheme()) {
+            themePending = false
+            rerenderForTheme()
+        }
+        scheduleNextThemeFlip()
+    }
+
+    override fun onPause() {
+        themeResumed = false
+        Theme.bind(prefs.isLightNow())   // 下一屏按最新时刻建，不必等回调
+        super.onPause()
+    }
+
+    /** 改过系统时间 / 换时区 / 跨天：重排下一次翻转，并把当前状态纠正过来。 */
+    override fun onStart() {
+        super.onStart()
+        val r = object : BroadcastReceiver() {
+            override fun onReceive(c: Context?, i: Intent?) {
+                if (syncTheme() && themeResumed) rerenderForTheme()
+                scheduleNextThemeFlip()
+            }
+        }
+        themeReceiver = r
+        runCatching {
+            registerReceiver(
+                r,
+                IntentFilter().apply {
+                    addAction(Intent.ACTION_TIME_CHANGED)
+                    addAction(Intent.ACTION_TIMEZONE_CHANGED)
+                    addAction(Intent.ACTION_DATE_CHANGED)
+                },
+            )
+        }
+    }
+
+    override fun onStop() {
+        themeReceiver?.let { runCatching { unregisterReceiver(it) } }
+        themeReceiver = null
+        super.onStop()
     }
 
     private fun hideSystemUi() {
@@ -412,8 +627,8 @@ class MainActivity : Activity() {
             // 输入框不放大：放大后它会比父容器宽出 46px，实测会导致聚焦状态首字符渲染异常
             applyFocusStyle(
                 view = this,
-                normalBg = 0xFF111827.toInt(),
-                focusedBg = 0xFF1E3A5F.toInt(),
+                normalBg = Theme.GLASS_2,
+                focusedBg = Theme.GLASS_2,
                 focusScale = 1f,
                 onFocusChanged = { hasFocus ->
                     if (hasFocus) {
@@ -446,13 +661,13 @@ class MainActivity : Activity() {
                 if (primary) ACCENT else PANEL,
                 this,
                 if (primary) INK else TEXT_COLOR,
-                if (primary) 0xFF7DD3FC.toInt() else ACCENT,
+                ACCENT,
             )
         }
 
     private fun progress(text: String = "加载中…") {
         dismissProgress()
-        busyDialog = AlertDialog.Builder(this)
+        busyDialog = dlg()
             .setMessage(text)
             // 网络挂住时不能把用户锁死在弹窗里（公共采集站经常超时）
             .setCancelable(true)
@@ -510,7 +725,7 @@ class MainActivity : Activity() {
         isFocusableInTouchMode = true
         // 电视列表：不要右边那条系统滚动条（和深色背景打架），行间用极淡分隔线
         isVerticalScrollBarEnabled = false
-        divider = android.graphics.drawable.ColorDrawable(0xFF1B2434.toInt())
+        divider = android.graphics.drawable.ColorDrawable(Theme.HAIRLINE)
         dividerHeight = 1
         setSelector(listSelector())
         // AdapterView 会把选中高亮一直留着，焦点移走后就变成「永远是聚焦状态」。
@@ -571,7 +786,7 @@ class MainActivity : Activity() {
                 dismissProgress()
                 val msg = describe(e)
                 // 以前失败只弹一个一秒就消失的 toast，网络抖动时用户会以为「点了没反应」
-                AlertDialog.Builder(this@MainActivity)
+                dlg()
                     .setTitle("请求失败")
                     .setMessage(msg)
                     .setPositiveButton("重试") { _, _ -> runApi(loading, block, then) }
@@ -889,14 +1104,14 @@ class MainActivity : Activity() {
             // 版本号后面加红点 + 提示，用警示色强调
             val start = ("DpadTV v" + BuildConfig.VERSION_NAME).length
             span.setSpan(
-                ForegroundColorSpan(0xFFEF4444.toInt()),
+                ForegroundColorSpan(Theme.DANGER),
                 start,
                 head.length,
                 Spanned.SPAN_EXCLUSIVE_EXCLUSIVE,
             )
         }
         setText(span)
-        setTextColor(0xFF64748B.toInt())
+        setTextColor(Theme.MUTED)
         setTextSize(13f)
         setLineSpacing(dp(4).toFloat(), 1f)
         setPadding(0, dp(18), 0, 0)
@@ -937,7 +1152,7 @@ class MainActivity : Activity() {
             prefs.updateBannerSeen = tag
             showUpdateDetail()
         }.apply {
-            if (!unseen) setTextColor(0xFF94A3B8.toInt())
+            if (!unseen) setTextColor(Theme.MUTED)
         }
     }
 
@@ -948,7 +1163,7 @@ class MainActivity : Activity() {
         // 左栏：更新说明，内容长时可滚动
         val notesView = TextView(this).apply {
             setText(notes)
-            setTextColor(Color.parseColor("#cbd5e1"))
+            setTextColor(Theme.INK)
             setTextSize(14f)
             setLineSpacing(dp(5).toFloat(), 1f)
             setPadding(0, 0, dp(20), 0)
@@ -977,13 +1192,13 @@ class MainActivity : Activity() {
             addView(qrCard, LinearLayout.LayoutParams(dp(196), dp(196)))
             addView(TextView(this@MainActivity).apply {
                 setText("扫码下载")
-                setTextColor(Color.parseColor("#94a3b8"))
+                setTextColor(Theme.MUTED)
                 setTextSize(13f)
                 setPadding(0, dp(12), 0, 0)
             })
             addView(TextView(this@MainActivity).apply {
                 setText(url)
-                setTextColor(0xFF38BDF8.toInt())
+                setTextColor(Theme.ACCENT)
                 setTextSize(11f)
                 setPadding(0, dp(6), 0, 0)
             })
@@ -996,7 +1211,7 @@ class MainActivity : Activity() {
             addView(right)
         }
 
-        AlertDialog.Builder(this)
+        dlg()
             .setTitle("新版本 " + prefs.latestTag + "（当前 " + BuildConfig.VERSION_NAME + "）")
             .setView(row)
             .setPositiveButton("知道了") { _, _ -> showRecommend() }
@@ -1047,7 +1262,7 @@ class MainActivity : Activity() {
             }, onItem = { idx ->
                 val id = order[idx]
                 val isHidden = hidden.contains(id)
-                AlertDialog.Builder(this)
+                dlg()
                     .setTitle(HomeBar.label(id) + if (isHidden) "（已隐藏）" else "")
                     .setItems(
                         arrayOf("上移", "下移", if (isHidden) "显示" else "隐藏", "恢复默认顺序"),
@@ -1096,7 +1311,7 @@ class MainActivity : Activity() {
         val bytes = PlaybackCache.sizeBytes(this)
         val mb = bytes / 1024.0 / 1024.0
         val text = String.format(java.util.Locale.US, "当前占用 %.1f MB\n上限 2 GB，超出后自动淘汰最久未用的片段。", mb)
-        AlertDialog.Builder(this)
+        dlg()
             .setTitle("播放缓存")
             .setMessage(text)
             .setPositiveButton("清空") { _, _ ->
@@ -1127,7 +1342,7 @@ class MainActivity : Activity() {
         val diskText = String.format(java.util.Locale.US, "%.1f MB", diskMb)
         val msg = "图片缓存：$imgs 张\n观看历史：$hist 条\n搜索记录：$search 条\n" +
             "播放进度：$progress 条\n播放缓存（磁盘）：$diskText\n\n片源配置、直播源和服务器设置不会被清除。"
-        AlertDialog.Builder(this)
+        dlg()
             .setTitle("清理缓存")
             .setMessage(msg)
             .setPositiveButton("清理") { _, _ ->
@@ -1143,9 +1358,18 @@ class MainActivity : Activity() {
     }
     /* ------------------------------------------------------------- 播放设置 */
 
+    /**
+     * 对话框工厂：按**解析出来的**主题显式选样式。
+     *
+     * 不能只靠 values-night 限定符 —— 用户可能在系统（这台电视恒报浅色）下显式选深色。
+     * 漏改一处，浅色主题里就会弹出一个黑对话框。
+     */
+    private fun dlg(): AlertDialog.Builder =
+        AlertDialog.Builder(this, if (Theme.isLight) R.style.AppDialogLight else R.style.AppDialogDark)
+
     /** 单选弹窗（用全局对话框主题，和片源操作菜单同一套样式） */
     private fun chooseOption(title: String, options: List<String>, current: Int, onPick: (Int) -> Unit) {
-        AlertDialog.Builder(this)
+        dlg()
             .setTitle(title)
             .setSingleChoiceItems(options.toTypedArray(), current) { dialog, which ->
                 dialog.dismiss()
@@ -1228,12 +1452,13 @@ class MainActivity : Activity() {
         col.addView(hintText("服务器与片源  ·  已配置 ${prefs.sources().size} 个片源"))
         col.addView(TextView(this).apply {
             setText("已连接：" + prefs.serverUrl)
-            setTextColor(Color.parseColor("#94a3b8"))
+            setTextColor(Theme.MUTED)
             setTextSize(15f)
             setPadding(0, dp(12), 0, dp(22))
         })
-        // 设置项按「内容 / 播放 / 系统」分组，组内两列等宽 ——
+        // 设置项按「外观 / 内容 / 播放 / 系统」分组，组内等宽 ——
         // 之前是一列高低不齐的按钮，右侧大片空白，3 米外看着像标签云
+        col.addView(themeGroup())
         col.addView(settingGroup("内容", listOf(
             "片源管理" to { showSources() },
             "修改服务器设置" to { showServerSettings() },
@@ -1269,7 +1494,7 @@ class MainActivity : Activity() {
         items.chunked(2).forEach { pair ->
             val row = LinearLayout(this).apply { orientation = LinearLayout.HORIZONTAL }
             pair.forEach { (label, action) ->
-                row.addView(equalButton(label, action))
+                row.addView(equalButton(label, action = action))
             }
             if (pair.size == 1) {
                 // 单数补一个占位，保证两列对齐
@@ -1283,8 +1508,8 @@ class MainActivity : Activity() {
     }
 
     /** 等宽按钮：设置页专用，避免每个按钮宽度随文字长短跳动 */
-    private fun equalButton(label: String, action: () -> Unit): TextView {
-        val tv = Theme.pill(this, label, selected = false)
+    private fun equalButton(label: String, selected: Boolean = false, action: () -> Unit): TextView {
+        val tv = Theme.pill(this, label, selected = selected)
         tv.layoutParams = LinearLayout.LayoutParams(0, dp(46), 1f).apply { rightMargin = dp(10) }
         tv.gravity = Gravity.CENTER_VERTICAL
         tv.setPadding(dp(16), 0, dp(16), 0)
@@ -1319,7 +1544,7 @@ class MainActivity : Activity() {
 
         val statusLine = TextView(this).apply {
             setText(if (prefs.serverUrl.isEmpty()) "未连接" else "上次连接：" + prefs.serverUrl)
-            setTextColor(Color.parseColor("#94a3b8"))
+            setTextColor(Theme.MUTED)
             setTextSize(15f)
             setPadding(0, dp(14), 0, dp(6))
         }
@@ -1425,7 +1650,7 @@ class MainActivity : Activity() {
                 val dot = View(this@MainActivity).apply {
                     background = android.graphics.drawable.GradientDrawable().apply {
                         shape = android.graphics.drawable.GradientDrawable.OVAL
-                        setColor(if (s.enabled) ACCENT else Color.parseColor("#64748b"))
+                        setColor(if (s.enabled) ACCENT else Theme.MUTED)
                     }
                 }
                 val name = TextView(this@MainActivity).apply {
@@ -1437,7 +1662,7 @@ class MainActivity : Activity() {
                 }
                 val domain = TextView(this@MainActivity).apply {
                     text = s.url
-                    setTextColor(Color.parseColor("#64748b"))
+                    setTextColor(Theme.MUTED)
                     setTextSize(13f)
                     isSingleLine = true
                     ellipsize = android.text.TextUtils.TruncateAt.MIDDLE
@@ -1455,10 +1680,10 @@ class MainActivity : Activity() {
                     }
                     setTextColor(
                         when {
-                            !s.enabled -> Color.parseColor("#64748b")
-                            r == null -> Color.parseColor("#94a3b8")
-                            r.first -> Color.parseColor("#4ade80")
-                            else -> Color.parseColor("#f87171")
+                            !s.enabled -> Theme.MUTED
+                            r == null -> Theme.MUTED
+                            r.first -> Theme.ST_WATCHING
+                            else -> Theme.DANGER
                         },
                     )
                     setTextSize(13f)
@@ -1533,7 +1758,7 @@ class MainActivity : Activity() {
             "测试连通性",
             "删除",
         )
-        AlertDialog.Builder(this)
+        dlg()
             .setTitle(s.name)
             .setItems(actions) { _, which ->
                 val cur = prefs.sources()
@@ -1583,7 +1808,7 @@ class MainActivity : Activity() {
             setPadding(dp(24), dp(12), dp(24), 0)
         }
         box.addView(input)
-        AlertDialog.Builder(this)
+        dlg()
             .setTitle(if (name) "片源名称" else "采集站地址")
             .setView(box)
             .setPositiveButton("保存") { _, _ ->
@@ -1703,7 +1928,7 @@ class MainActivity : Activity() {
                 })
                 box.addView(TextView(this@MainActivity).apply {
                     text = desc
-                    setTextColor(Color.parseColor("#64748b"))
+                    setTextColor(Theme.MUTED)
                     setTextSize(13f)
                     setPadding(0, dp(3), 0, 0)
                 })
@@ -1829,7 +2054,7 @@ class MainActivity : Activity() {
         setScreen(col)
     }
     private fun sourceJsonMenu() {
-        AlertDialog.Builder(this)
+        dlg()
             .setTitle("sources.json 从哪里来")
             .setItems(
                 arrayOf("粘贴 JSON 文本", "从设备文件选择（U 盘 / 下载目录）", "从网址下载（可用内网地址）"),
@@ -1856,7 +2081,7 @@ class MainActivity : Activity() {
             setPadding(dp(24), dp(12), dp(24), 0)
         }
         box.addView(input)
-        AlertDialog.Builder(this)
+        dlg()
             .setTitle(title)
             .setView(box)
             .setPositiveButton("确定") { _, _ -> onOk(input.text.toString().trim()) }
@@ -2000,7 +2225,7 @@ class MainActivity : Activity() {
         bindList(listView, 
             sources.map { s -> "${s.name}\n${s.url}" },
             onItem = { idx ->
-                AlertDialog.Builder(this)
+                dlg()
                     .setTitle(sources[idx].name)
                     .setItems(arrayOf("删除该片源")) { _, _ ->
                         val left = prefs.sources().filterIndexed { i, _ -> i != idx }
@@ -2032,7 +2257,7 @@ class MainActivity : Activity() {
         val urlField = field("https://xxx/api.php/provide/vod")
         box.addView(nameField)
         box.addView(urlField)
-        AlertDialog.Builder(this)
+        dlg()
             .setTitle("添加采集站")
             .setView(box)
             .setPositiveButton("添加") { _, _ ->
@@ -2081,7 +2306,7 @@ class MainActivity : Activity() {
         ))
         bar.addView(button("来源筛选") {
             val names = listOf("全部来源") + lastResults.map { it.sourceName }.distinct().sorted()
-            AlertDialog.Builder(this)
+            dlg()
                 .setTitle("只看某个采集站的结果")
                 .setItems(names.toTypedArray()) { _, which ->
                     sourceFilter = if (which == 0) "" else names[which]
@@ -2150,13 +2375,13 @@ class MainActivity : Activity() {
                         })
                         addView(TextView(this@MainActivity).apply {
                             setTextSize(12f)
-                            setTextColor(0xFF94A3B8.toInt())
+                            setTextColor(Theme.MUTED)
                             maxLines = 2
                             setPadding(0, dp(4), 0, 0)
                         })
                         addView(TextView(this@MainActivity).apply {
                             setTextSize(11f)
-                            setTextColor(0xFF64748B.toInt())
+                            setTextColor(Theme.MUTED)
                             maxLines = 2
                             setPadding(0, dp(4), 0, 0)
                         })
@@ -2265,7 +2490,7 @@ class MainActivity : Activity() {
                     "片源 ${prefs.sources().size} 个 · 服务器 ${api.baseUrl}" +
                         if (sourceFilter.isEmpty()) "" else " · 只看：$sourceFilter",
                 )
-                setTextColor(Color.parseColor("#64748b"))
+                setTextColor(Theme.MUTED)
                 setTextSize(13f)
                 setPadding(0, dp(6), dp(12), dp(8))
             },
@@ -2275,7 +2500,7 @@ class MainActivity : Activity() {
             statusRow.addView(
                 button(if (sourceFilter.isEmpty()) "来源筛选" else "来源：" + sourceFilter.take(8)) {
                     val names = listOf("全部来源") + lastResults.map { it.sourceName }.distinct().sorted()
-                    AlertDialog.Builder(this)
+                    dlg()
                         .setTitle("只看某个采集站的结果")
                         .setItems(names.toTypedArray()) { _, which ->
                             sourceFilter = if (which == 0) "" else names[which]
@@ -2415,6 +2640,8 @@ class MainActivity : Activity() {
 
     private fun showDetail(item: SearchItem, detail: Detail) {
         currentScreen = "detail"
+        lastDetailItem = item
+        lastDetailData = detail
         val col = LinearLayout(this).apply {
             orientation = LinearLayout.VERTICAL
             setPadding(dp(Theme.PAGE_X), dp(Theme.PAGE_Y), dp(Theme.PAGE_X), dp(20))
@@ -2524,7 +2751,7 @@ class MainActivity : Activity() {
                 val names = alternatives.map {
                     (if (it.sourceUrl == item.sourceUrl) "● " else "    ") + it.sourceName.ifEmpty { "来源" }
                 }
-                AlertDialog.Builder(this)
+                dlg()
                     .setTitle("选一个采集站")
                     .setItems(names.toTypedArray()) { _, which ->
                         val alt = alternatives[which]
@@ -2708,7 +2935,7 @@ class MainActivity : Activity() {
             addLiveDialog()
             return
         }
-        AlertDialog.Builder(this)
+        dlg()
             .setTitle("选择直播源")
             .setItems(urls.toTypedArray()) { _, which ->
                 prefs.activeLiveUrl = urls[which]
@@ -2730,7 +2957,7 @@ class MainActivity : Activity() {
         box.addView(hintText("填 M3U 播放列表地址。服务端会去抓这个地址，所以必须是公网可访问的（内网地址会被拒）。"))
         val urlField = field("https://iptv-org.github.io/iptv/countries/cn.m3u")
         box.addView(urlField)
-        AlertDialog.Builder(this)
+        dlg()
             .setTitle("添加直播源")
             .setView(box)
             .setPositiveButton("添加") { _, _ ->
@@ -2867,7 +3094,7 @@ class MainActivity : Activity() {
                                     setTextSize(15f); setTextColor(TEXT_COLOR); maxLines = 2
                                 })
                                 addView(TextView(this@MainActivity).apply {
-                                    setTextSize(12f); setTextColor(0xFF94A3B8.toInt())
+                                    setTextSize(12f); setTextColor(Theme.MUTED)
                                     maxLines = 1; setPadding(0, dp(4), 0, 0)
                                 })
                             },
@@ -2944,6 +3171,7 @@ class MainActivity : Activity() {
     /** 「查看更多」：把这一行的合并结果铺成网格（M2 会加 chip 与筛选器）。 */
     private fun openShelf(shelf: Shelf) {
         currentScreen = "browse"
+        lastShelf = shelf
         val repo = CollectionRepo(this)
         scope.launch {
             // 先把首页已经算好的合并结果带进去：进「查看更多」是秒开，不额外打豆瓣
@@ -3121,7 +3349,7 @@ class MainActivity : Activity() {
                 addView(
                     TextView(this@MainActivity).apply {
                         setTextSize(13f)
-                        setTextColor(Color.parseColor("#e5e7eb"))
+                        setTextColor(Theme.INK)
                         maxLines = 2
                         setPadding(0, dp(6), 0, 0)
                     },

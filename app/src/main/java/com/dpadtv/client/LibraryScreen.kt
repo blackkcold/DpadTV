@@ -28,10 +28,11 @@ class LibraryScreen(
     private val onBack: () -> Unit,
 ) {
 
-    private val accent = Theme.ACCENT
-    private val ink = Theme.INK
-    private val muted = Theme.MUTED
-    private val panel = Theme.PANEL
+    // getter，不是快照：换主题后已经建好的界面也要立刻跟着变
+    private val accent get() = Theme.ACCENT
+    private val ink get() = Theme.INK
+    private val muted get() = Theme.MUTED
+    private val panel get() = Theme.PANEL
 
     private var filter: LibState? = null
     private val items = ArrayList<LibEntry>()
@@ -126,7 +127,7 @@ class LibraryScreen(
     private fun chip(label: String, on: Boolean, click: () -> Unit): View = TextView(host).apply {
         text = label
         setTextSize(Theme.CAPTION)
-        setTextColor(if (on) Color.parseColor("#04121B") else ink)
+        setTextColor(if (on) Theme.ACCENT_INK else ink)
         isFocusable = true
         isFocusableInTouchMode = false
         setPadding(dp(15), dp(8), dp(15), dp(8))
@@ -162,7 +163,7 @@ class LibraryScreen(
                 addView(ImageView(host).apply {
                     layoutParams = LinearLayout.LayoutParams(dp(146), dp(204))
                     scaleType = ImageView.ScaleType.CENTER_CROP
-                    setBackgroundColor(Color.parseColor("#1a2233"))
+                    setBackgroundColor(Theme.POSTER_BG)
                 })
                 addView(TextView(host).apply {
                     setTextSize(Theme.CAPTION); setTextColor(ink); maxLines = 1
@@ -198,12 +199,8 @@ class LibraryScreen(
         if (stroke != Color.TRANSPARENT) setStroke(dp(2), stroke)
     }
 
-    private fun ring(color: Int): android.graphics.drawable.Drawable {
-        val g = GradientDrawable().apply {
-            setColor(Color.TRANSPARENT)
-            cornerRadius = dp(8).toFloat()
-            if (color != Color.TRANSPARENT) setStroke(dp(3), color)
-        }
-        return InsetDrawable(g, dp(2))
-    }
+    /** 焦点环：走 Theme 的**双环**（强调色 + 对向 halo），单环在亮封面上会隐形 */
+    private fun ring(color: Int): android.graphics.drawable.Drawable =
+        if (color == Color.TRANSPARENT) InsetDrawable(Theme.fill(host, Color.TRANSPARENT, Theme.RADIUS), dp(2))
+        else Theme.focusRing(host, Theme.RADIUS)
 }

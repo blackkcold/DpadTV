@@ -37,10 +37,11 @@ class ShelvesScreen(
 ) {
 
     private val scope = CoroutineScope(SupervisorJob() + Dispatchers.Main)
-    private val accent = Theme.ACCENT
-    private val panel = Theme.PANEL
-    private val ink = Theme.INK
-    private val muted = Theme.MUTED
+    // getter，不是快照：换主题后已经建好的行也要立刻跟着变
+    private val accent get() = Theme.ACCENT
+    private val panel get() = Theme.PANEL
+    private val ink get() = Theme.INK
+    private val muted get() = Theme.MUTED
 
     private fun dp(v: Int) = (v * host.resources.displayMetrics.density).toInt()
 
@@ -76,7 +77,7 @@ class ShelvesScreen(
         }
         val root = ScrollView(host).apply {
             isFillViewport = true
-            setBackgroundColor(Color.parseColor("#0b1220"))
+            setBackgroundColor(Theme.BG)
             addView(col)
         }
         root.postDelayed({
@@ -214,7 +215,7 @@ class ShelvesScreen(
         row.addView(TextView(host).apply {
             text = "▶"
             setTextSize(15f)
-            setTextColor(0xFF04121B.toInt())
+            setTextColor(Theme.ACCENT_INK)
             gravity = Gravity.CENTER
             background = rounded(accent, dp(9))
             setPadding(dp(8), dp(4), dp(8), dp(4))
@@ -323,13 +324,16 @@ class ShelvesScreen(
         setOnFocusChangeListener { v, focused -> v.background = ring(if (focused) accent else Color.TRANSPARENT) }
     }
 
-    /** 状态色：和「来源角标」区分开，否则用户分不清"收藏"是状态还是榜单 */
+    /**
+     * 状态色：和「来源角标」区分开，否则用户分不清"收藏"是状态还是榜单。
+     * 走令牌两套明度 —— 浅色下 #34D399 在 #F2F3F5 上只有 1.73:1，等于看不见。
+     */
     private fun stateColor(label: String): Int = when (label) {
         "收藏" -> accent
-        "在看" -> 0xFF34D399.toInt()
-        "看过" -> 0xFFCBD5E1.toInt()
-        "想看" -> 0xFFFBBF24.toInt()
-        else -> 0xFFF87171.toInt()
+        "在看" -> Theme.ST_WATCHING
+        "看过" -> Theme.ST_WATCHED
+        "想看" -> Theme.ST_WISH
+        else -> Theme.ST_DROPPED
     }
 
     private fun posterCell(item: MovieItem, dominantBadge: String = "", stateBadge: Boolean = false): View {
@@ -341,12 +345,12 @@ class ShelvesScreen(
         }
         val frame = FrameLayout(host).apply {
             layoutParams = LinearLayout.LayoutParams(dp(146), dp(204))
-            background = rounded(Color.parseColor("#1a2233"), dp(8))
+            background = rounded(Theme.POSTER_BG, dp(8))
         }
         val img = ImageView(host).apply {
             layoutParams = FrameLayout.LayoutParams(ViewGroup.LayoutParams.MATCH_PARENT, ViewGroup.LayoutParams.MATCH_PARENT)
             scaleType = ImageView.ScaleType.CENTER_CROP
-            setBackgroundColor(Color.parseColor("#1a2233"))
+            setBackgroundColor(Theme.POSTER_BG)
         }
         frame.addView(img)
         if (item.badge.isNotEmpty() && (stateBadge || item.badge != dominantBadge)) {
@@ -357,7 +361,7 @@ class ShelvesScreen(
                     // 状态：描边标签（空心）+ 状态色，和"来源榜"的实心蓝标签一眼区分
                     val c = stateColor(item.badge)
                     setTextColor(c)
-                    background = Theme.rounded(host, 0x99000000.toInt(), c, 6, 1)
+                    background = Theme.rounded(host, Theme.GLASS_2, c, 6, 1)
                 } else {
                     setTextColor(Theme.ACCENT_INK)
                     background = rounded(accent, dp(4))
@@ -380,7 +384,7 @@ class ShelvesScreen(
         cell.addView(label)
 
         cell.setOnFocusChangeListener { _, focused ->
-            frame.background = ring(if (focused) accent else Color.TRANSPARENT, base = Color.parseColor("#1a2233"))
+            frame.background = ring(if (focused) accent else Color.TRANSPARENT, base = Theme.POSTER_BG)
             cell.scaleX = if (focused) 1.06f else 1f
             cell.scaleY = if (focused) 1.06f else 1f
         }
@@ -401,11 +405,11 @@ class ShelvesScreen(
         setPadding(dp(5), dp(4), dp(5), dp(4))
         addView(View(host).apply {
             layoutParams = LinearLayout.LayoutParams(dp(146), dp(204))
-            background = rounded(Color.parseColor("#16202e"), dp(8))
+            background = rounded(Theme.POSTER_BG, dp(8))
         })
         addView(View(host).apply {
             layoutParams = LinearLayout.LayoutParams(dp(110), dp(10)).apply { topMargin = dp(8) }
-            background = rounded(Color.parseColor("#16202e"), dp(3))
+            background = rounded(Theme.POSTER_BG, dp(3))
         })
     }
 
@@ -455,12 +459,8 @@ class ShelvesScreen(
         cornerRadius = radius.toFloat()
     }
 
-    private fun ring(color: Int, base: Int = Color.TRANSPARENT): android.graphics.drawable.Drawable {
-        val g = GradientDrawable().apply {
-            setColor(base)
-            cornerRadius = dp(8).toFloat()
-            if (color != Color.TRANSPARENT) setStroke(dp(3), color)
-        }
-        return InsetDrawable(g, dp(2))
-    }
+    /** 焦点环：走 Theme 的**双环**（强调色 + 对向 halo），单环在亮海报上会隐形 */
+    private fun ring(color: Int, base: Int = Color.TRANSPARENT): android.graphics.drawable.Drawable =
+        if (color == Color.TRANSPARENT) InsetDrawable(rounded(base, dp(8)), dp(2))
+        else Theme.focusRing(host, Theme.RADIUS, base = base)
 }

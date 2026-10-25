@@ -38,10 +38,11 @@ class BrowseScreen(
     private val onOpenTitle: (String) -> Unit,
 ) {
 
-    private val accent = Theme.ACCENT
-    private val ink = Theme.INK
-    private val muted = Theme.MUTED
-    private val panel = Theme.PANEL
+    // getter，不是快照：换主题后已经建好的界面也要立刻跟着变
+    private val accent get() = Theme.ACCENT
+    private val ink get() = Theme.INK
+    private val muted get() = Theme.MUTED
+    private val panel get() = Theme.PANEL
 
     private val scope = CoroutineScope(SupervisorJob() + Dispatchers.Main)
     private val chips = ChipStore(host)
@@ -187,7 +188,7 @@ class BrowseScreen(
     private fun chipView(label: String, on: Boolean, click: () -> Unit): View = TextView(host).apply {
         text = label
         setTextSize(Theme.CAPTION)
-        setTextColor(if (on) Color.parseColor("#04121B") else ink)
+        setTextColor(if (on) Theme.ACCENT_INK else ink)
         isFocusable = true
         isFocusableInTouchMode = false
         setPadding(dp(15), dp(8), dp(15), dp(8))
@@ -309,7 +310,7 @@ class BrowseScreen(
         val q = currentQuery(0)
         val suggested = DoubanUrls.label(q)
         val input = EditText(host).apply { setText(suggested); setSingleLine() }
-        AlertDialog.Builder(host)
+        dlg()
             .setTitle("存为榜单")
             .setMessage("把当前筛选保存成一个 chip，下次一次点击就到。")
             .setView(input)
@@ -342,7 +343,7 @@ class BrowseScreen(
                 addView(ImageView(host).apply {
                     layoutParams = LinearLayout.LayoutParams(dp(146), dp(204))
                     scaleType = ImageView.ScaleType.CENTER_CROP
-                    setBackgroundColor(Color.parseColor("#1a2233"))
+                    setBackgroundColor(Theme.POSTER_BG)
                 })
                 addView(TextView(host).apply {
                     setTextSize(Theme.CAPTION); setTextColor(ink); maxLines = 1
@@ -369,18 +370,18 @@ class BrowseScreen(
         }
     }
 
+    /** 弹窗按解析出来的主题显式选样式（不能只靠 -night 限定符） */
+    private fun dlg(): AlertDialog.Builder =
+        AlertDialog.Builder(host, if (Theme.isLight) R.style.AppDialogLight else R.style.AppDialogDark)
+
     private fun pill(color: Int, stroke: Int = Color.TRANSPARENT): GradientDrawable = GradientDrawable().apply {
         setColor(color)
         cornerRadius = dp(8).toFloat()
         if (stroke != Color.TRANSPARENT) setStroke(dp(2), stroke)
     }
 
-    private fun ring(color: Int): android.graphics.drawable.Drawable {
-        val g = GradientDrawable().apply {
-            setColor(Color.TRANSPARENT)
-            cornerRadius = dp(8).toFloat()
-            if (color != Color.TRANSPARENT) setStroke(dp(3), color)
-        }
-        return InsetDrawable(g, dp(2))
-    }
+    /** 焦点环：走 Theme 的**双环**（强调色 + 对向 halo），单环在亮封面上会隐形 */
+    private fun ring(color: Int): android.graphics.drawable.Drawable =
+        if (color == Color.TRANSPARENT) InsetDrawable(Theme.fill(host, Color.TRANSPARENT, Theme.RADIUS), dp(2))
+        else Theme.focusRing(host, Theme.RADIUS)
 }

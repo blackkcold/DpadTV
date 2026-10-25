@@ -31,7 +31,8 @@ object PosterActions {
         val labels = actions.map { if (it == cur) "${it.label}  ✓" else it.label }.toMutableList()
         if (cur != null) labels.add("从片单移除")
 
-        AlertDialog.Builder(host)
+        // 弹窗必须按解析出来的主题显式选样式，否则浅色主题下会弹出深色菜单
+        AlertDialog.Builder(host, if (Theme.isLight) R.style.AppDialogLight else R.style.AppDialogDark)
             .setTitle(item.title)
             .setItems(labels.toTypedArray()) { _, which ->
                 val picked = if (which < actions.size) actions[which] else null

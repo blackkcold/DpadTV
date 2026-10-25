@@ -414,6 +414,10 @@ class PlayerActivity : Activity() {
 
     private fun dp(v: Int): Int = (v * resources.displayMetrics.density).toInt()
 
+    /** 播放器里的设置弹窗跟随主题；控制条本身不跟随（恒用 onImage 深色玻璃压视频）。 */
+    private fun dlg(): android.app.AlertDialog.Builder =
+        android.app.AlertDialog.Builder(this, if (Theme.isLight) R.style.AppDialogLight else R.style.AppDialogDark)
+
     private fun toast(msg: String) {
         Toast.makeText(this, msg, Toast.LENGTH_SHORT).show()
     }
@@ -569,7 +573,7 @@ class PlayerActivity : Activity() {
         val cur = speeds.indexOfFirst {
             kotlin.math.abs(it - (player?.playbackParameters?.speed ?: 1f)) < 0.01f
         }
-        android.app.AlertDialog.Builder(this)
+        dlg()
             .setTitle("播放倍速")
             .setSingleChoiceItems(labels.toTypedArray(), cur.coerceAtLeast(-1)) { d, which ->
                 player?.setPlaybackSpeed(speeds[which])
@@ -584,7 +588,7 @@ class PlayerActivity : Activity() {
 
     private fun showDecodeMenu() {
         val names = arrayOf("自动（推荐）", "强制软解", "强制硬解")
-        android.app.AlertDialog.Builder(this)
+        dlg()
             .setTitle("解码方式（下次打开视频生效）")
             .setSingleChoiceItems(names, prefs.decodeMode.coerceIn(0, 2)) { d, which ->
                 prefs.decodeMode = which
@@ -597,7 +601,7 @@ class PlayerActivity : Activity() {
 
     private fun showAspectMenu() {
         val names = arrayOf("适应屏幕", "裁切铺满", "拉伸铺满")
-        android.app.AlertDialog.Builder(this)
+        dlg()
             .setTitle("显示比例")
             .setSingleChoiceItems(names, aspectMode) { d, which ->
                 aspectMode = which
