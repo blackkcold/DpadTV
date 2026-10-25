@@ -19,31 +19,30 @@ import java.security.MessageDigest
 enum class FetchFailure { NONE, RATE_LIMITED, OFFLINE, UPSTREAM }
 
 /**
- * 榜单抓取 + 本地缓存 + 侧车优先。
+ * 榜单取数：**本地索引优先，联网只做兜底**。
  *
- * 数据链路：
- *   App → 侧车（路由 :8898，全屋共享缓存 + 预热 + 熔断）→ 豆瓣
- *   App → 豆瓣 直连只在侧车不可达时兜底，且失败后长退避，不反复撞风控。
+ * 数据链路（改过一次，原因见 docs/AUDIT-BROWSE-SIDECAR.md）：
+ *   App → assets/douban-index.json.gz（本地求交，0 请求）      ← 正常路径
+ *   App → 豆瓣直连（只在索引缺该标签 / 用户点「按 OK 重试」）   ← 兜底，2.5s 节流 + 长退避
  *
- * v1 的教训：侧车在 `ALLOW_UPSTREAM=0` 时返回 `{"msg":"offline mode...","r":1}`，
- * 客户端靠 `body.contains("\"r\":1")` 猜状态 → 把「侧车没开上游」当成「豆瓣限流」，
- * 于是永远显示「豆瓣限流，N 分钟后自动恢复」。v2 改为**读 X-Cache 头判定**，body 不参与判态。
+ * 为什么砍掉 sidecar：榜单是周级变化的公共元数据，把它做成"实时搜索"才是慢和限流的根源。
+ * 预生成索引随 APK 发布后，运行期不需要任何常驻服务；抓取改在 `tools/build_index.py` 里做。
  *
  * 三条纪律：
- *   1. 侧车返回的 200 才当真数据；429 才是限流；503 是配置/上游问题
- *   2. 只有真限流才设退避（按 Retry-After），offline-miss 不设
- *   3. 每页结果单独缓存 7 天（与侧车 TTL 对齐），滚动分页不重复打接口
+ *   1. 本地索引命中的结果不做二次请求（`lastSource = "index"`，UI 上标数据日期）
+ *   2. 只有真限流才设退避（按 Retry-After），断网/空结果不设
+ *   3. 每页结果单独缓存 7 天，滚动分页不重复打接口
  */
 class CollectionRepo(private val ctx: Context) {
 
-    /**
-     * 豆瓣缓存 sidecar（路由上跑）：同一个 URL 全屋共享缓存 + 单飞 + 全局串行 + 每日预热。
-     * 地址由服务器地址推导：http://192.168.0.14:8899 → http://192.168.0.14:8898
-     */
-    private val sidecar: String? = runCatching {
-        val host = java.net.URI(Prefs(ctx).serverUrl).host ?: return@runCatching null
-        "http://$host:8898"
-    }.getOrNull()
+    /** 本地榜单索引：优先命中它，命中就完全不发请求（含首页与筛选页） */
+    private val index by lazy { LocalIndex(ctx) }
+
+    /** 上一次结果来自哪里：UI 用来标"本地索引 · 2026-10-25"还是"已联网刷新" */
+    @Volatile
+    var lastSource: String = ""
+        private set
+
 
     private val ua =
         "Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/122.0.0.0 Safari/537.36"
@@ -57,12 +56,25 @@ class CollectionRepo(private val ctx: Context) {
     var lastFailure: FetchFailure = FetchFailure.NONE
         private set
 
+    /** 本地索引的生成日期（没有索引就是空串） */
+    fun indexBuiltAt(): String = runCatching { index.builtAt }.getOrDefault("")
+
     fun blockedSecondsLeft(): Long {
         val left = blockedUntil - System.currentTimeMillis()
         return if (left > 0) left / 1000 else 0
     }
 
     suspend fun fetch(ref: CollectionRef, ttlMs: Long = TTL): List<MovieItem> = withContext(Dispatchers.IO) {
+        // 本地索引命中就返回：切标签/回首页都是 0 请求
+        run {
+            val q = ref.toQuery()
+            val local = index.query(q.tags, q.year, q.minRate, 0, maxOf(ref.weight.let { 60 }, 40))
+            if (local.size >= 6) {
+                lastSource = "index"
+                lastFailure = FetchFailure.NONE
+                return@withContext local
+            }
+        }
         when (ref.kind) {
         RefKind.SEARCH -> cached(ref.id) {
             val q = Query(ref.tags, ref.year, if (ref.minRate > 0) ref.minRate else 0.0, Sort.RATING, 0)
@@ -88,62 +100,20 @@ class CollectionRepo(private val ctx: Context) {
 
     /** 浏览页用：按 Query + 页码取一页（20 条） */
     suspend fun fetchQuery(q: Query, ttlMs: Long = TTL): List<MovieItem> = withContext(Dispatchers.IO) {
+        // 本地优先：有 >= 6 条就先给结果，联网只在"本地不够/用户主动刷新"时发生
+        val local = index.query(q.tags, q.year, q.minRate, q.start, 24)
+        if (local.size >= 6 || (q.start > 0 && local.isEmpty() && index.available)) {
+            lastSource = "index"
+            lastFailure = FetchFailure.NONE
+            return@withContext local
+        }
         val url = DoubanUrls.search(q)
         cached("q_" + md5(url)) { request(url)?.let { parseNewSearch(it) } ?: emptyList() }
     }
 
     // ---------- 取数：侧车优先，直连兜底 ----------
 
-    /** https://movie.douban.com/xxx → Pair("movie.douban.com", "/xxx") */
-    private fun parseDouban(url: String): Pair<String, String>? = when {
-        url.startsWith("https://movie.douban.com/") -> "movie.douban.com" to url.removePrefix("https://movie.douban.com")
-        url.startsWith("https://www.douban.com/") -> "www.douban.com" to url.removePrefix("https://www.douban.com")
-        else -> null
-    }
-
     private suspend fun request(url: String): String? = gate.withLock {
-        val douban = parseDouban(url)
-
-        // 1) 侧车优先：命中时上游 0 请求，局域网毫秒级
-        if (douban != null && sidecar != null) {
-            val (host, path) = douban
-            val resp = runCatching {
-                getRaw(sidecar + "/douban?path=" + enc(path) + "&host=" + host)
-            }.getOrNull()
-
-            if (resp != null) {
-                val verdict = resp.cache.orEmpty()
-                val usable = resp.code == 200 && resp.body.isNotBlank() &&
-                    verdict != "offline-miss" && verdict != "rate-limited" && verdict != "upstream-error"
-                if (usable) {
-                    lastFailure = FetchFailure.NONE
-                    Log.i("DpadTVDouban", "sidecar ${verdict.ifEmpty { "v1" }} ${resp.body.length}B ${path.take(52)}")
-                    return@withLock resp.body
-                }
-                when (verdict) {
-                    "rate-limited" -> {
-                        val retry = resp.retryAfter.takeIf { it > 0 } ?: 600L
-                        blockedUntil = System.currentTimeMillis() + retry * 1000
-                        lastFailure = FetchFailure.RATE_LIMITED
-                        Log.w("DpadTVDouban", "侧车限流，退避 ${retry}s：${path.take(52)}")
-                        return@withLock null
-                    }
-                    "offline-miss" -> {
-                        // 侧车没开上游（配置态），不是限流 —— 不设退避，也不直连补刀
-                        lastFailure = FetchFailure.OFFLINE
-                        Log.w("DpadTVDouban", "侧车 offline-miss（ALLOW_UPSTREAM=0）：${path.take(52)}")
-                        return@withLock null
-                    }
-                    else -> {
-                        lastFailure = FetchFailure.UPSTREAM
-                        Log.w("DpadTVDouban", "侧车 upstream-error(${resp.code})：${path.take(52)}")
-                        return@withLock null
-                    }
-                }
-            }
-            Log.w("DpadTVDouban", "sidecar 不可达，直连一次：${path.take(52)}")
-        }
-
         // 2) 直连兜底：只在侧车不可达 / 没有侧车时走；失败即长退避，不反复撞风控
         if (System.currentTimeMillis() < blockedUntil) return@withLock null
         val gap = 2500 - (System.currentTimeMillis() - lastRequestAt)
@@ -164,6 +134,7 @@ class CollectionRepo(private val ctx: Context) {
             return@withLock null
         }
         lastFailure = FetchFailure.NONE
+        lastSource = "network"
         Log.i("DpadTVDouban", "direct OK ${resp.body.length}B ${url.substringAfter("?").take(70)}")
         resp.body
     }

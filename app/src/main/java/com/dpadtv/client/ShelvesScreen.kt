@@ -258,7 +258,8 @@ class ShelvesScreen(
         val h = (host.resources.displayMetrics.heightPixels * 0.40f).toInt()
         val frame = FrameLayout(host).apply {
             layoutParams = LinearLayout.LayoutParams(ViewGroup.LayoutParams.MATCH_PARENT, h)
-            setBackgroundColor(Theme.BG)
+            // 图没到之前也必须是"一块幕布"，不能是黑洞（网络慢时用户先看到的就是这块）
+            background = Theme.scrimTop(if (Theme.isLight) 0xFFD8DADE.toInt() else 0xFF16191F.toInt())
         }
         heroA = ImageView(host).apply {
             layoutParams = FrameLayout.LayoutParams(ViewGroup.LayoutParams.MATCH_PARENT, ViewGroup.LayoutParams.MATCH_PARENT)

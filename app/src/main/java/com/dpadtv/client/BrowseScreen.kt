@@ -67,6 +67,9 @@ class BrowseScreen(
 
     private fun dp(v: Int) = (v * host.resources.displayMetrics.density).toInt()
 
+    private var filtersBox: LinearLayout? = null
+    private var progressBar: android.widget.ProgressBar? = null
+
     fun build(): View {
         val col = LinearLayout(host).apply {
             orientation = LinearLayout.VERTICAL
@@ -109,19 +112,19 @@ class BrowseScreen(
             addView(chipsRow)
         })
 
-        // 四维筛选
-        col.addView(filterRow("年份", listOf("全部", "2025", "2024", "2023")) { v ->
-            year = if (v == "全部") null else v; activeChip = null; activeRef = null; renderChips(); reload()
-        })
-        col.addView(filterRow("地区", listOf("全部", "华语", "欧美", "韩国", "日本")) { v ->
-            region = if (v == "全部") null else v; activeChip = null; activeRef = null; renderChips(); reload()
-        })
-        col.addView(filterRow("类型", listOf("全部", "剧情", "悬疑", "科幻", "喜剧", "爱情", "动作", "动画")) { v ->
-            genre = if (v == "全部") null else v; activeChip = null; activeRef = null; renderChips(); reload()
-        })
-        col.addView(filterRow("排序", listOf("评分", "热门", "最新")) { v ->
-            sort = Sort.entries.first { it.label == v }; activeChip = null; activeRef = null; renderChips(); reload()
-        })
+        // 四维筛选：**每次点击后整行重建** —— 之前只建一次，on 是建行那一刻的快照，
+        // 于是"点了日本没有高亮"（选中态永远停在初始值）。
+        filtersBox = LinearLayout(host).apply { orientation = LinearLayout.VERTICAL }
+        col.addView(filtersBox)
+        renderFilters()
+
+        // 3dp 细进度条：不遮挡内容，也不用弹窗打断
+        progressBar = android.widget.ProgressBar(host, null, android.R.attr.progressBarStyleHorizontal).apply {
+            isIndeterminate = true
+            visibility = View.GONE
+            layoutParams = LinearLayout.LayoutParams(ViewGroup.LayoutParams.MATCH_PARENT, dp(3))
+        }
+        col.addView(progressBar)
 
         // 网格
         adapter = cellAdapter()
@@ -188,18 +191,46 @@ class BrowseScreen(
     private fun chipView(label: String, on: Boolean, click: () -> Unit): View = TextView(host).apply {
         text = label
         setTextSize(Theme.CAPTION)
-        setTextColor(if (on) Theme.ACCENT_INK else ink)
+        setTextColor(if (on) Theme.INK else Theme.MUTED)
         isFocusable = true
         isFocusableInTouchMode = false
         setPadding(dp(15), dp(8), dp(15), dp(8))
-        background = pill(if (on) accent else panel)
+        background = Theme.rounded(host, if (on) Theme.GLASS_2 else Color.TRANSPARENT,
+            if (on) accent else Theme.HAIRLINE, Theme.RADIUS, 1)
         setOnClickListener { click() }
         setOnFocusChangeListener { v, f ->
-            v.background = pill(if (on) accent else panel, if (f) accent else Color.TRANSPARENT)
+            v.background = Theme.rounded(host, if (on || f) Theme.GLASS_2 else Color.TRANSPARENT,
+                if (f || on) accent else (if (on) accent else Theme.HAIRLINE), Theme.RADIUS, if (f) 2 else 1)
         }
         layoutParams = LinearLayout.LayoutParams(
             ViewGroup.LayoutParams.WRAP_CONTENT, ViewGroup.LayoutParams.WRAP_CONTENT,
         ).apply { rightMargin = dp(8) }
+    }
+
+    /** 重建整排筛选器（选中态就在这里被刷新） */
+    private fun renderFilters() {
+        val box = filtersBox ?: return
+        val focusTag = host.currentFocus?.tag
+        box.removeAllViews()
+        data class Spec(val name: String, val values: List<String>, val apply: (String) -> Unit)
+        val specs = listOf(
+            Spec("年份", listOf("全部", "2025", "2024", "2023")) { v -> year = if (v == "全部") null else v },
+            Spec("地区", listOf("全部", "华语", "欧美", "韩国", "日本")) { v -> region = if (v == "全部") null else v },
+            Spec("类型", listOf("全部", "剧情", "悬疑", "科幻", "喜剧", "爱情", "动作", "动画")) { v -> genre = if (v == "全部") null else v },
+            Spec("排序", listOf("评分", "热门", "最新")) { v -> sort = Sort.entries.first { it.label == v } },
+        )
+        specs.forEach { spec ->
+            box.addView(filterRow(spec.name, spec.values) { v ->
+                spec.apply(v)
+                activeChip = null
+                activeRef = null
+                renderFilters()
+                renderChips()
+                reload()
+                // 重建后把焦点还给刚点的那个值，遥控器不用重新找
+                box.post { box.findViewWithTag<View>(v)?.requestFocus() }
+            })
+        }
     }
 
     private fun filterRow(name: String, values: List<String>, onPick: (String) -> Unit): View {
@@ -224,13 +255,26 @@ class BrowseScreen(
             }
             row.addView(TextView(host).apply {
                 text = v
-                setTextSize(Theme.CAPTION)
-                setTextColor(if (on) accent else muted)
+                tag = v
+                setTextSize(Theme.LABEL)
+                setTextColor(if (on) Theme.INK else Theme.MUTED)
                 isFocusable = true
-                setPadding(dp(10), dp(4), dp(10), dp(4))
+                isFocusableInTouchMode = false
+                setPadding(dp(11), dp(5), dp(11), dp(5))
+                background = Theme.rounded(
+                    host,
+                    if (on) Theme.GLASS_2 else Color.TRANSPARENT,
+                    if (on) accent else Color.TRANSPARENT,
+                    Theme.RADIUS, 1,
+                )
                 setOnClickListener { onPick(v) }
                 setOnFocusChangeListener { view, f ->
-                    view.background = pill(Color.TRANSPARENT, if (f) accent else Color.TRANSPARENT)
+                    view.background = Theme.rounded(
+                        host,
+                        if (on || f) Theme.GLASS_2 else Color.TRANSPARENT,
+                        if (f || on) accent else Theme.HAIRLINE,
+                        Theme.RADIUS, if (f) 2 else 1,
+                    )
                 }
             })
         }
@@ -273,12 +317,42 @@ class BrowseScreen(
         }
     }
 
+    /**
+     * 重新取数。**不清空已有结果** —— 之前一进来就 clear()，慢的时候用户看到的是白屏，
+     * 分不清"在加载"还是"坏了"。现在：旧内容留着、顶部走一条 3dp 进度条、状态栏写清在取什么。
+     */
     private fun reload() {
-        items.clear()
         done = false
-        adapter.notifyDataSetChanged()
-        status.text = "  · 加载中"
-        loadMore()
+        val q = currentQuery(0)
+        status.setOnClickListener(null)
+        status.text = "  · 正在取 ${DoubanUrls.label(q)}"
+        progressBar?.visibility = View.VISIBLE
+        scope.launch {
+            val page = repo.fetchQuery(q)
+            progressBar?.visibility = View.GONE
+            if (page.isNotEmpty()) {
+                items.clear()
+                items.addAll(page)
+                adapter.notifyDataSetChanged()
+                status.text = "  · 共 ${items.size} 部 · ${DoubanUrls.label(q)}${sourceHint()}"
+            } else {
+                done = true
+                status.text = "  · " + when (repo.lastFailure) {
+                    FetchFailure.RATE_LIMITED -> "豆瓣暂时不给数据（按 OK 重试）"
+                    FetchFailure.OFFLINE -> "本地索引缺这一块（按 OK 联网取）"
+                    FetchFailure.UPSTREAM -> "取不到（按 OK 重试）"
+                    FetchFailure.NONE -> "这个组合本地没有（按 OK 联网取）"
+                }
+                status.setOnClickListener { reload() }
+            }
+        }
+    }
+
+    /** 让用户知道这批数据是本地索引还是刚联网拿的 */
+    private fun sourceHint(): String = when (repo.lastSource) {
+        "index" -> " · 本地索引" + repo.indexBuiltAt().let { if (it.isNotEmpty()) " $it" else "" }
+        "network" -> " · 已联网刷新"
+        else -> ""
     }
 
     private fun loadMore() {
