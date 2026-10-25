@@ -1,0 +1,136 @@
+<!DOCTYPE html>
+<html lang="zh-CN">
+<head>
+<meta charset="utf-8">
+<style>
+  .w{width:1080px;font-family:inherit;color:var(--foreground);}
+  .w *{box-sizing:border-box;}
+  .mono{font-variant-numeric:tabular-nums;font-feature-settings:"tnum";}
+  .label{font-size:10.5px;letter-spacing:.14em;text-transform:uppercase;color:var(--muted-foreground);}
+  h1{font-size:24px;line-height:1.2;margin:6px 0 4px;font-weight:650;letter-spacing:-.01em;}
+  .sub{font-size:12.5px;color:var(--muted-foreground);margin:0 0 14px;}
+  .kpis{display:grid;grid-template-columns:repeat(5,1fr);gap:9px;margin:12px 0 4px;}
+  .kpi{border:1px solid var(--border);border-radius:10px;padding:9px 11px;background:var(--card);}
+  .kpi .v{font-size:19px;font-weight:650;letter-spacing:-.02em;}
+  .kpi .k{font-size:10.5px;color:var(--muted-foreground);margin-top:2px;}
+  .ok{color:var(--accent);}
+  .sec{display:flex;align-items:baseline;gap:10px;margin:20px 0 9px;}
+  .sec .n{font-size:10.5px;color:var(--accent);font-weight:600;letter-spacing:.1em;}
+  .sec h2{font-size:14.5px;margin:0;font-weight:600;}
+  .sec .hint{font-size:11px;color:var(--muted-foreground);margin-left:auto;}
+  table{width:100%;border-collapse:collapse;font-size:11.5px;}
+  th,td{text-align:left;padding:6px 8px;border-bottom:1px solid var(--border);vertical-align:top;}
+  th{font-size:10px;letter-spacing:.1em;text-transform:uppercase;color:var(--muted-foreground);font-weight:500;}
+  td.m{color:var(--muted-foreground);}
+  .chain{display:grid;grid-template-columns:1fr 22px 1fr 22px 1fr;gap:8px;align-items:center;}
+  .box{border:1px solid var(--border);border-radius:10px;padding:10px;background:var(--card);font-size:11.5px;line-height:1.5;}
+  .box b{display:block;font-size:12px;margin-bottom:3px;}
+  .box span{color:var(--muted-foreground);font-size:10.5px;}
+  .arw{text-align:center;color:var(--accent);}
+  .chk{display:grid;grid-template-columns:1fr 1fr;gap:8px;}
+  .ci{display:flex;gap:8px;border:1px solid var(--border);border-radius:9px;padding:8px 10px;background:var(--card);font-size:11.5px;align-items:flex-start;}
+  .ci .mk{color:var(--accent);font-weight:700;}
+  .ci .d{color:var(--muted-foreground);font-size:10.5px;margin-top:2px;}
+  .shots{display:grid;grid-template-columns:repeat(3,1fr);gap:10px;}
+  .shot{border:1px solid var(--border);border-radius:10px;overflow:hidden;background:var(--card);}
+  .shot .cap{font-size:10.5px;color:var(--muted-foreground);padding:7px 9px;border-top:1px solid var(--border);}
+  .shot .ph{height:118px;background:
+     repeating-linear-gradient(135deg,color-mix(in oklab,var(--border) 60%,transparent) 0 8px,transparent 8px 16px);
+     display:flex;align-items:center;justify-content:center;font-size:10.5px;color:var(--muted-foreground);}
+  .warn{border:1px solid color-mix(in oklab,var(--accent) 40%,var(--border));border-radius:10px;padding:10px 12px;background:color-mix(in oklab,var(--accent) 7%,transparent);font-size:11.5px;line-height:1.6;}
+  .dec{display:grid;grid-template-columns:1fr 1fr;gap:9px;margin-top:4px;}
+  .q{border:1px solid var(--border);border-radius:10px;padding:11px;background:var(--card);cursor:pointer;transition:border-color .15s,transform .15s;}
+  .q:hover{border-color:color-mix(in oklab,var(--accent) 55%,var(--border));transform:translateY(-1px);}
+  .q .qt{font-size:12px;font-weight:600;margin-bottom:5px;}
+  .q .qd{font-size:11px;color:var(--muted-foreground);line-height:1.45;}
+  .q .opt{display:flex;gap:5px;margin-top:7px;flex-wrap:wrap;}
+  .opt span{font-size:10.5px;padding:2px 6px;border-radius:5px;border:1px solid var(--border);color:var(--muted-foreground);}
+  .opt span.rec{color:var(--foreground);border-color:color-mix(in oklab,var(--accent) 60%,var(--border));background:color-mix(in oklab,var(--accent) 10%,transparent);}
+  .foot{margin-top:16px;padding-top:10px;border-top:1px solid var(--border);display:flex;justify-content:space-between;font-size:10.5px;color:var(--muted-foreground);}
+</style>
+</head>
+<body>
+<div class="w">
+
+  <div class="label">Milestone Report · M1 · 2026-10-25 · 全程模拟器，电视仍未碰</div>
+  <h1>M1 完成：合并货架跑起来了，点海报能直接出片</h1>
+  <p class="sub">3 行货架（电影 / 剧集 / 综艺·纪录片），每行 3–4 个榜合并去重，行尾「查看更多」进网格</p>
+
+  <div class="kpis">
+    <div class="kpi"><div class="v mono ok">3</div><div class="k">首页货架行</div></div>
+    <div class="kpi"><div class="v mono ok">18</div><div class="k">每行合并条目</div></div>
+    <div class="kpi"><div class="v mono ok">7</div><div class="k">JVM 单测（全绿）</div></div>
+    <div class="kpi"><div class="v mono">11</div><div class="k">新增/改动文件</div></div>
+    <div class="kpi"><div class="v mono">2</div><div class="k">commit</div></div>
+  </div>
+
+  <div class="sec"><span class="n">01</span><h2>三层结构</h2><span class="hint">加榜 = 加一行配置</span></div>
+  <div class="chain">
+    <div class="box"><b>Shelf（行）</b><span>电影 / 剧集 / 综艺·纪录片<br>最多 5 行，竖滚</span></div>
+    <div class="arw">→</div>
+    <div class="box"><b>CollectionRef（榜）</b><span>热门 · Top250 · 9分+ · 2025<br>韩剧2025 · 日剧2025 …</span></div>
+    <div class="arw">→</div>
+    <div class="box"><b>Query（豆瓣）</b><span>tags + year + range + sort<br>或 top250 页 / 豆列</span></div>
+  </div>
+
+  <div class="sec"><span class="n">02</span><h2>合并纪律</h2><span class="hint">Merger.kt，纯函数，7 条单测</span></div>
+  <table>
+    <tr><th style="width:24%">步骤</th><th>规则</th><th style="width:26%">防的是什么</th></tr>
+    <tr><td>归一化去重</td><td class="m">去空格全角、剥「(2025)」「第X季」</td><td class="m">同一部片在 3 个榜里出现 3 次</td></tr>
+    <tr><td>来源权重</td><td class="m">Top250/豆列 1.0 · 9分+ 0.9 · 热门 0.7 · 年度 0.6</td><td class="m">一行被「热门」刷成流量剧</td></tr>
+    <tr><td>打分</td><td class="m">评分 0.5 · 来源 0.3 · 新鲜度 0.2</td><td class="m">只有高分、没有新片</td></tr>
+    <tr><td>单榜配额</td><td class="m">≤ 40%，不足时按分数补齐（不重复）</td><td class="m">某个榜占满整行</td></tr>
+    <tr><td>角标抑制</td><td class="m">整行同源时不贴角标，只标少数派</td><td class="m">18 个 TOP250 贴满屏 = 噪音</td></tr>
+  </table>
+
+  <div class="sec"><span class="n">03</span><h2>实测链路</h2><span class="hint">截图都在 docs/shots/</span></div>
+  <div class="chk">
+    <div class="ci"><span class="mk">✓</span><div>3 行货架正常渲染<div class="d">电影 18 部 / 剧集 18 部 / 综艺·纪录片 18 部</div></div></div>
+    <div class="ci"><span class="mk">✓</span><div>豆瓣直连可用（模拟器内）<div class="d">new_search_subjects + top250 + 豆列均 200</div></div></div>
+    <div class="ci"><span class="mk">✓</span><div>海报加载正常<div class="d">走已有 /api/proxy，防盗链由服务端处理</div></div></div>
+    <div class="ci"><span class="mk">✓</span><div>「查看更多」进网格<div class="d">电影 · 合并 18 部，6 列</div></div></div>
+    <div class="ci"><span class="mk">✓</span><div>点海报 → 跨源搜索<div class="d">肖申克的救赎：5 部 / 21 条结果 / 13 个来源</div></div></div>
+    <div class="ci"><span class="mk">✓</span><div>返回层级正确<div class="d">结果 → 货架 → 退出；网格 → 货架</div></div></div>
+  </div>
+
+  <div class="sec"><span class="n">04</span><h2>截图</h2><span class="hint">1920×1080 模拟器实拍</span></div>
+  <div class="shots">
+    <div class="shot"><div class="ph">m1-03-home.png</div><div class="cap">首页：电影（TOP250 合并）+ 剧集（韩剧/美剧/日剧混排）</div></div>
+    <div class="shot"><div class="ph">m1-04-browse.png</div><div class="cap">查看更多：电影 · 合并 18 部</div></div>
+    <div class="shot"><div class="ph">m1-05-search.png</div><div class="cap">点海报 → 5 部 / 21 条 / 13 来源</div></div>
+  </div>
+
+  <div class="sec"><span class="n">05</span><h2>已知问题（M2 一起处理）</h2><span class="hint"></span></div>
+  <div class="warn">
+    ① 「查看更多」还只是网格，<b>没有 chip 条和四维筛选</b>（M2 的核心）。<br>
+    ② 剧集行混进了动画（豆瓣「日剧」标签本身就含番剧）——M2 用 tags 排除「动画」，或单独开「日番」榜。<br>
+    ③ 片名保留「第X季」：去重时剥了，展示时没剥，搜索命中率略低。
+  </div>
+
+  <div class="sec"><span class="n">06</span><h2>下一步</h2><span class="hint">点一下即当回答</span></div>
+  <div class="dec">
+    <div class="q" data-hermes-send="DpadTV Pro：继续 M2 —— 查看更多页加 chip 条（热门/Top250/奥斯卡/日剧2025）+ 四维筛选（年份/地区/类型/排序）+ 存为榜单">
+      <div class="qt">继续 M2 · 浏览页 chip + 筛选</div>
+      <div class="qd">把 16 个预设榜收进 chip，四维筛选覆盖其余组合</div>
+      <div class="opt"><span class="rec">开工 M2</span></div>
+    </div>
+    <div class="q" data-hermes-send="DpadTV Pro：先修已知问题（剧集混入动画、季数后缀展示），再做 M2">
+      <div class="qt">先修已知问题？</div>
+      <div class="qd">数据质量小修，约半小时</div>
+      <div class="opt"><span class="rec">顺手修掉（推荐）</span><span>先做 M2</span></div>
+    </div>
+  </div>
+
+  <div class="foot">
+    <span>commit e39a2de · 模拟器已关闭（scripts/dev-emu.sh 可再起）</span>
+    <span class="mono">电视仍是官方 1.2.0，未动</span>
+  </div>
+
+</div>
+<script>
+  document.querySelectorAll('[data-hermes-send]').forEach(el => el.addEventListener('click', () => {
+    if (window.hermes && window.hermes.send) window.hermes.send(el.dataset.hermesSend);
+  }));
+</script>
+</body>
+</html>

@@ -2711,12 +2711,13 @@ class MainActivity : Activity() {
 
     /** 「查看更多」：把这一行的合并结果铺成网格（M2 会加 chip 与筛选器）。 */
     private fun openShelf(shelf: Shelf) {
+        currentScreen = "browse"
         val repo = CollectionRepo(this)
         scope.launch {
-            val merged = Merger.merge(shelf.refs.map { it to repo.fetch(it) }, shelf.size)
-            currentScreen = "browse"
+            // 先把首页已经算好的合并结果带进去：进「查看更多」是秒开，不额外打豆瓣
+            val initial = Merger.merge(shelf.refs.map { it to repo.fetch(it) }, shelf.size)
             setScreen(
-                BrowseScreen(this@MainActivity, imageLoader, shelf, merged) { doSearch(it) }.build(),
+                BrowseScreen(this@MainActivity, imageLoader, repo, shelf, initial) { doSearch(it) }.build(),
             )
         }
     }

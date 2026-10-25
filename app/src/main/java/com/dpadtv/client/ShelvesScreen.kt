@@ -50,6 +50,13 @@ class ShelvesScreen(
         Shelves.home.forEach { shelf ->
             col.addView(shelfSection(shelf))
         }
+        // 单条串行流水线：一行拉完再拉下一行（限速在仓库内部），冷启动也不会打出并发风暴
+        scope.launch {
+            for (row in rows) {
+                val groups = row.shelf.refs.map { ref -> ref to repo.fetch(ref) }
+                render(row, Merger.merge(groups, row.shelf.size))
+            }
+        }
         return ScrollView(host).apply {
             isFillViewport = true
             setBackgroundColor(Color.parseColor("#0b1220"))
@@ -83,6 +90,23 @@ class ShelvesScreen(
             setTextColor(muted)
         })
         return row
+    }
+
+    private class Row(val shelf: Shelf, val strip: LinearLayout, val count: TextView)
+
+    private val rows = ArrayList<Row>()
+
+    private fun render(row: Row, merged: List<MovieItem>) {
+        row.strip.removeAllViews()
+        if (merged.isEmpty()) {
+            row.count.text = "  · 暂时取不到（豆瓣限流，稍后重试）"
+            row.strip.addView(retryCell(row.shelf, row.strip, row.count))
+            return
+        }
+        row.count.text = "  · ${merged.size} 部"
+        val dominant = merged.groupingBy { it.badge }.eachCount().maxByOrNull { it.value }?.key.orEmpty()
+        merged.forEach { row.strip.addView(posterCell(it, dominant)) }
+        row.strip.addView(endCell(row.shelf))
     }
 
     private fun shelfSection(shelf: Shelf): View {
@@ -123,22 +147,7 @@ class ShelvesScreen(
 
         // 骨架屏：先占位，避免"加载中…"的文字闪烁
         repeat(7) { strip.addView(skeletonCell()) }
-
-        scope.launch {
-            val groups = shelf.refs.map { ref -> ref to repo.fetch(ref) }
-            val merged = Merger.merge(groups, shelf.size)
-            strip.removeAllViews()
-            if (merged.isEmpty()) {
-                countLabel.text = "  · 暂时取不到（豆瓣接口可能被限流）"
-                strip.addView(retryCell(shelf, strip, countLabel))
-                return@launch
-            }
-            countLabel.text = "  · ${merged.size} 部"
-            // 角标只用来"解释差异"：整行都来自同一个榜时，那个角标就是噪音（整屏 18 个 TOP250）
-            val dominant = merged.groupingBy { it.badge }.eachCount().maxByOrNull { it.value }?.key.orEmpty()
-            merged.forEach { item -> strip.addView(posterCell(item, dominant)) }
-            strip.addView(endCell(shelf))
-        }
+        rows.add(Row(shelf, strip, countLabel))
         return box
     }
 

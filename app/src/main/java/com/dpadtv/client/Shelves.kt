@@ -62,4 +62,30 @@ object Shelves {
     val home: List<Shelf> = listOf(movie, tv, variety)
 
     fun byId(id: String): Shelf? = home.firstOrNull { it.id == id }
+
+    /** 浏览页 chip 条：每个货架给一组最常用的入口 */
+    fun chipsFor(shelfId: String): List<CollectionRef> = when (shelfId) {
+        "movie" -> listOf(
+            presets.first { it.id == "mv_hot" },
+            presets.first { it.id == "mv_top250" },
+            presets.first { it.id == "mv_oscar" },
+            presets.first { it.id == "mv_rate" },
+            presets.first { it.id == "mv_2025" },
+            presets.first { it.id == "mv_cn" },
+            presets.first { it.id == "mv_susp" },
+        )
+        "tv" -> listOf(
+            presets.first { it.id == "tv_2025" },
+            presets.first { it.id == "tv_kr" },
+            presets.first { it.id == "tv_jp" },
+            presets.first { it.id == "tv_us" },
+        )
+        else -> listOf(presets.first { it.id == "va_hot" }, presets.first { it.id == "va_doc" })
+    }
+
+    /** 货架默认浏览条件（没选 chip 时） */
+    fun defaultQuery(shelf: Shelf): Query {
+        val first = shelf.refs.firstOrNull { it.kind == RefKind.SEARCH } ?: shelf.refs.first()
+        return Query(tags = first.tags, year = first.year, minRate = first.minRate, sort = Sort.RATING)
+    }
 }

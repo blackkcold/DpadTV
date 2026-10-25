@@ -31,3 +31,32 @@ data class CollectionRef(
 
 /** 首页一行 = 若干榜单合并去重后的结果 */
 data class Shelf(val id: String, val title: String, val refs: List<CollectionRef>, val size: Int = 18)
+
+enum class Sort(val label: String, val code: String) {
+    RATING("评分", "T"),
+    HOT("热门", "S"),
+    LATEST("最新", "U"),
+}
+
+/**
+ * 浏览页的一次查询：标签（可多个）+ 年份 + 最低分 + 排序 + 起始偏移。
+ * chip 与筛选器最终都折叠成这一个对象，URL 只有一处拼装（DoubanUrls）。
+ */
+data class Query(
+    val tags: List<String> = emptyList(),
+    val year: String? = null,
+    val minRate: Double = 0.0,
+    val sort: Sort = Sort.RATING,
+    val start: Int = 0,
+) {
+    /** 用于缓存键与「存为榜单」的稳定标识 */
+    fun key(): String = "${tags.joinToString("+")}|${year ?: ""}|$minRate|${sort.code}"
+}
+
+/** chip（预设榜）落到查询条件：热门榜走 HOT 排序，其余按评分 */
+fun CollectionRef.toQuery(): Query = when (kind) {
+    RefKind.HOT -> Query(tags = listOf("电影"), sort = Sort.HOT)
+    RefKind.SEARCH -> Query(tags = tags, year = year, minRate = minRate, sort = Sort.RATING)
+    RefKind.TOP250 -> Query(tags = listOf("电影"), minRate = 8.5, sort = Sort.RATING)
+    RefKind.DOULIST -> Query(tags = listOf("电影"), minRate = 0.0, sort = Sort.RATING)
+}
