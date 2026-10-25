@@ -31,6 +31,11 @@ class Prefs(ctx: Context) {
         get() = sp.getString("cookie", "") ?: ""
         set(v) = sp.edit().putString("cookie", v).apply()
 
+    /** 首页用合并货架（M1+）。关掉则退回上游的"单榜单海报墙"，便于对比与回滚。 */
+    fun shelvesEnabled(): Boolean = sp.getBoolean("shelves_enabled", true)
+
+    fun setShelvesEnabled(v: Boolean) = sp.edit().putBoolean("shelves_enabled", v).apply()
+
     fun sources(): MutableList<SourceConfig> {
         val text = sp.getString("sources", "[]") ?: "[]"
         val out = ArrayList<SourceConfig>()

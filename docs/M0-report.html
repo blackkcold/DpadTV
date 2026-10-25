@@ -1,0 +1,122 @@
+<!DOCTYPE html>
+<html lang="zh-CN">
+<head>
+<meta charset="utf-8">
+<style>
+  .w{width:1080px;font-family:inherit;color:var(--foreground);}
+  .w *{box-sizing:border-box;}
+  .mono{font-variant-numeric:tabular-nums;font-feature-settings:"tnum";}
+  .label{font-size:10.5px;letter-spacing:.14em;text-transform:uppercase;color:var(--muted-foreground);}
+  h1{font-size:24px;line-height:1.2;margin:6px 0 4px;font-weight:650;letter-spacing:-.01em;}
+  .sub{font-size:12.5px;color:var(--muted-foreground);margin:0 0 14px;}
+  .kpis{display:grid;grid-template-columns:repeat(5,1fr);gap:9px;margin:12px 0 4px;}
+  .kpi{border:1px solid var(--border);border-radius:10px;padding:9px 11px;background:var(--card);}
+  .kpi .v{font-size:19px;font-weight:650;letter-spacing:-.02em;}
+  .kpi .k{font-size:10.5px;color:var(--muted-foreground);margin-top:2px;}
+  .ok{color:var(--accent);}
+  .sec{display:flex;align-items:baseline;gap:10px;margin:20px 0 9px;}
+  .sec .n{font-size:10.5px;color:var(--accent);font-weight:600;letter-spacing:.1em;}
+  .sec h2{font-size:14.5px;margin:0;font-weight:600;}
+  .sec .hint{font-size:11px;color:var(--muted-foreground);margin-left:auto;}
+  table{width:100%;border-collapse:collapse;font-size:11.5px;}
+  th,td{text-align:left;padding:6px 8px;border-bottom:1px solid var(--border);vertical-align:top;}
+  th{font-size:10px;letter-spacing:.1em;text-transform:uppercase;color:var(--muted-foreground);font-weight:500;}
+  td.m{color:var(--muted-foreground);}
+  .loop{display:grid;grid-template-columns:repeat(5,1fr);gap:8px;align-items:stretch;}
+  .step{border:1px solid var(--border);border-radius:10px;padding:10px;background:var(--card);}
+  .step .st{font-size:11px;font-weight:600;margin-bottom:4px;}
+  .step .sd{font-size:10.5px;color:var(--muted-foreground);line-height:1.45;}
+  .step code{font-size:10px;color:var(--accent);}
+  .chk{display:grid;grid-template-columns:1fr 1fr;gap:9px;}
+  .chkitem{display:flex;gap:8px;border:1px solid var(--border);border-radius:9px;padding:9px 10px;background:var(--card);font-size:11.5px;}
+  .chkitem .mk{color:var(--accent);font-weight:700;}
+  .chkitem .d{color:var(--muted-foreground);font-size:10.5px;margin-top:2px;}
+  .warn{border:1px solid color-mix(in oklab,var(--accent) 45%,var(--border));border-radius:10px;padding:10px 12px;background:color-mix(in oklab,var(--accent) 8%,transparent);font-size:11.5px;line-height:1.55;}
+  .dec{display:grid;grid-template-columns:1fr 1fr;gap:9px;margin-top:4px;}
+  .q{border:1px solid var(--border);border-radius:10px;padding:11px;background:var(--card);cursor:pointer;transition:border-color .15s,transform .15s;}
+  .q:hover{border-color:color-mix(in oklab,var(--accent) 55%,var(--border));transform:translateY(-1px);}
+  .q .qt{font-size:12px;font-weight:600;margin-bottom:5px;}
+  .q .qd{font-size:11px;color:var(--muted-foreground);line-height:1.45;}
+  .q .opt{display:flex;gap:5px;margin-top:7px;flex-wrap:wrap;}
+  .opt span{font-size:10.5px;padding:2px 6px;border-radius:5px;border:1px solid var(--border);color:var(--muted-foreground);}
+  .opt span.rec{color:var(--foreground);border-color:color-mix(in oklab,var(--accent) 60%,var(--border));background:color-mix(in oklab,var(--accent) 10%,transparent);}
+  .foot{margin-top:16px;padding-top:10px;border-top:1px solid var(--border);display:flex;justify-content:space-between;font-size:10.5px;color:var(--muted-foreground);}
+</style>
+</head>
+<body>
+<div class="w">
+
+  <div class="label">Milestone Report · M0 · 2026-10-25 · 全程本机，未接触电视</div>
+  <h1>M0 通过：fork 能编译、能跑、能连上本地 LibreTV</h1>
+  <p class="sub">项目已建：<span class="mono">~/Projects/dpadtv-pro</span>（Hermes 项目 DpadTV Pro）· 分支 <span class="mono">feature/collections</span> · 基线 v1.2.0</p>
+
+  <div class="kpis">
+    <div class="kpi"><div class="v mono ok">1m46s</div><div class="k">首次构建</div></div>
+    <div class="kpi"><div class="v mono">6.0 MB</div><div class="k">app-debug.apk</div></div>
+    <div class="kpi"><div class="v mono ok">16</div><div class="k">自动导入片源</div></div>
+    <div class="kpi"><div class="v mono ok">48</div><div class="k">首页首屏条目</div></div>
+    <div class="kpi"><div class="v mono">0</div><div class="k">电视操作</div></div>
+  </div>
+
+  <div class="sec"><span class="n">01</span><h2>工具链（实测，不是猜）</h2><span class="hint">已写入 docs/BUILD.md</span></div>
+  <table>
+    <tr><th style="width:20%">项</th><th style="width:34%">实测值</th><th>备注</th></tr>
+    <tr><td>JDK</td><td class="mono">Temurin 21.0.12.1</td><td class="m">上游注释写 JDK 25，21 实测可编译</td></tr>
+    <tr><td>Gradle</td><td class="mono">wrapper 9.5.0</td><td class="m">首次自动下载，约 1–2 min</td></tr>
+    <tr><td>AGP</td><td class="mono">9.3.0</td><td class="m">自带 Kotlin 链；**不能再加** kotlin.android 插件</td></tr>
+    <tr><td>SDK</td><td class="mono">compileSdk 37 / minSdk 23 / build-tools 37.0.0</td><td class="m">本机已装 <span class="mono">android-37.0</span></td></tr>
+    <tr><td>产物</td><td class="mono">app/build/outputs/apk/debug/app-debug.apk</td><td class="m">6,001,644 B</td></tr>
+  </table>
+
+  <div class="sec"><span class="n">02</span><h2>本机测试回路</h2><span class="hint">以后每个功能都走这条线，不碰电视</span></div>
+  <div class="loop">
+    <div class="step"><div class="st">① 起模拟器</div><div class="sd"><code>scripts/dev-emu.sh</code><br>AVD <span class="mono">dpadtv-tv</span>，1920×1080 @320dpi，headless</div></div>
+    <div class="step"><div class="st">② 构建</div><div class="sd"><code>./gradlew assembleDebug</code><br>JDK21，增量几秒</div></div>
+    <div class="step"><div class="st">③ 安装启动</div><div class="sd"><code>scripts/deploy-emu.sh</code><br>装包 → 拉起 → 等 8s</div></div>
+    <div class="step"><div class="st">④ 截图取证</div><div class="sd">自动落到 <span class="mono">docs/shots/emu-HHMMSS.png</span></div></div>
+    <div class="step"><div class="st">⑤ 关掉</div><div class="sd"><code>scripts/stop-emu.sh</code><br>省内存</div></div>
+  </div>
+
+  <div class="sec"><span class="n">03</span><h2>实测通过项</h2><span class="hint">截图都在 docs/shots/</span></div>
+  <div class="chk">
+    <div class="chkitem"><span class="mk">✓</span><div>构建通过<div class="d">仅 2 条 deprecated 警告，无错误</div></div></div>
+    <div class="chkitem"><span class="mk">✓</span><div>装进模拟器<div class="d">arm64 镜像，Streamed Install Success</div></div></div>
+    <div class="chkitem"><span class="mk">✓</span><div>服务器地址预填生效<div class="d">local.properties → BuildConfig → 表单</div></div></div>
+    <div class="chkitem"><span class="mk">✓</span><div>登录成功<div class="d">「已连接：http://192.168.0.14:8899」</div></div></div>
+    <div class="chkitem"><span class="mk">✓</span><div>源自动导入<div class="d">「已配置 16 个片源」</div></div></div>
+    <div class="chkitem"><span class="mk">✓</span><div>首页渲染 + 海报加载<div class="d">「豆瓣·热门·电影·第1批，共 48 条」，图片正常</div></div></div>
+  </div>
+
+  <div class="sec"><span class="n">04</span><h2>必须记住的差异</h2><span class="hint"></span></div>
+  <div class="warn">
+    模拟器是 <b>arm64-v8a</b>，电视只有 <b>armeabi-v7a</b>。本机能验：逻辑、UI、网络契约、DB。
+    本机<b>不能</b>验：真实硬解、遥控器手感、电视性能。<b>功能做完再装电视一次</b>，不逐版刷机。
+  </div>
+
+  <div class="sec"><span class="n">05</span><h2>下一步</h2><span class="hint">点一下即当回答</span></div>
+  <div class="dec">
+    <div class="q" data-hermes-send="DpadTV Pro：开始 M1 —— 合并式榜单（Shelf/Ref/Repo/Merger + 5 行首页），全程本机模拟器验证">
+      <div class="qt">开始 M1 · 合并式榜单</div>
+      <div class="qd">Shelf / CollectionRef / Repo / Merger + 5 行首页，约 2 人日</div>
+      <div class="opt"><span class="rec">开工 M1</span></div>
+    </div>
+    <div class="q" data-hermes-send="DpadTV Pro：先补单测骨架（JUnit），把 Merger/画像这类纯逻辑用 JVM 测试覆盖，再进 M1">
+      <div class="qt">先补单测骨架？</div>
+      <div class="qd">合并/推荐是纯算法，JVM 单测比截图验证快十倍</div>
+      <div class="opt"><span class="rec">边做边补（推荐）</span><span>先单独补</span></div>
+    </div>
+  </div>
+
+  <div class="foot">
+    <span>commit 8a4a1d5 · docs/BUILD.md · scripts/*.sh</span>
+    <span class="mono">模拟器仍在运行</span>
+  </div>
+
+</div>
+<script>
+  document.querySelectorAll('[data-hermes-send]').forEach(el => el.addEventListener('click', () => {
+    if (window.hermes && window.hermes.send) window.hermes.send(el.dataset.hermesSend);
+  }));
+</script>
+</body>
+</html>

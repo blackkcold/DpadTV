@@ -259,7 +259,8 @@ class MainActivity : Activity() {
             "serversettings" -> showSetup()
             "detail", "live", "setup", "history" -> showRecommend()
             "sources" -> if (sourcesOrigin == "setup") showSetup() else showRecommend()
-            "home", "recommend" -> super.onBackPressed()
+            "home", "recommend", "shelves" -> super.onBackPressed()
+            "browse" -> showShelves()
             // 导入流程内的页面：逐级退回上一级，而不是退出 App
             "input" -> showAddSource()
             "manualadd" -> showAddSource()
@@ -2695,7 +2696,36 @@ class MainActivity : Activity() {
 
     /* ------------------------------------------------------------ 推荐首页 */
 
+    /** M1：合并货架首页。上游的 showRecommend 保留在下面，用 Prefs.shelvesEnabled 切回。 */
+    private fun showShelves() {
+        currentScreen = "shelves"
+        val screen = ShelvesScreen(
+            this,
+            imageLoader,
+            CollectionRepo(this),
+            onOpenTitle = { doSearch(it) },
+            onMore = { shelf -> openShelf(shelf) },
+        )
+        setScreen(screen.build())
+    }
+
+    /** 「查看更多」：把这一行的合并结果铺成网格（M2 会加 chip 与筛选器）。 */
+    private fun openShelf(shelf: Shelf) {
+        val repo = CollectionRepo(this)
+        scope.launch {
+            val merged = Merger.merge(shelf.refs.map { it to repo.fetch(it) }, shelf.size)
+            currentScreen = "browse"
+            setScreen(
+                BrowseScreen(this@MainActivity, imageLoader, shelf, merged) { doSearch(it) }.build(),
+            )
+        }
+    }
+
     private fun showRecommend() {
+        if (prefs.shelvesEnabled()) {
+            showShelves()
+            return
+        }
         currentScreen = "recommend"
         if (recommendItems.isEmpty()) {
             loadRecommend()
