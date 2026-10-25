@@ -77,6 +77,8 @@ class MainActivity : Activity() {
     private var detailFromResults = false
     /** 上一次搜索词，空态文案要用 */
     private var lastKeyword = ""
+    /** 直播分组是否还没被用户手动选过（用于"默认进第一个分组"） */
+    private var liveGroupAuto = true
     /** 设置页是否展开「服务器连接」区块。已连接时默认收起（低频操作不占首屏） */
     private var setupShowFields = false
     private val REQ_PICK_JSON = 1001
@@ -506,6 +508,10 @@ class MainActivity : Activity() {
     private fun newList(): ListView = ListView(this).apply {
         isFocusable = true
         isFocusableInTouchMode = true
+        // 电视列表：不要右边那条系统滚动条（和深色背景打架），行间用极淡分隔线
+        isVerticalScrollBarEnabled = false
+        divider = android.graphics.drawable.ColorDrawable(0xFF1B2434.toInt())
+        dividerHeight = 1
         setSelector(listSelector())
         // AdapterView 会把选中高亮一直留着，焦点移走后就变成「永远是聚焦状态」。
         // 失焦时把 selector 换成透明，重新聚焦再装回来。
@@ -1028,7 +1034,7 @@ class MainActivity : Activity() {
             setPadding(dp(48), dp(24), dp(48), dp(20))
         }
         col.addView(brandRow(false))
-        col.addView(titleText("首页按钮排序", 20f))
+        col.addView(titleText("首页按钮排序", Theme.DISPLAY))
         col.addView(hintText("选中一条按 OK：上移 / 下移 / 隐藏 / 恢复默认"))
 
         val listView = newList()
@@ -1156,7 +1162,7 @@ class MainActivity : Activity() {
             setPadding(dp(48), dp(24), dp(48), dp(20))
         }
         col.addView(brandRow(false))
-        col.addView(titleText("播放设置", 20f))
+        col.addView(titleText("播放设置", Theme.DISPLAY))
         col.addView(hintText("选中一条按 OK，在弹出的菜单里选择"))
 
         fun rows(): List<String> = listOf(
@@ -1303,7 +1309,7 @@ class MainActivity : Activity() {
             setPadding(dp(56), dp(36), dp(56), dp(36))
         }
         col.addView(brandRow(false))
-        col.addView(titleText("服务器设置", 20f))
+        col.addView(titleText("服务器设置", Theme.DISPLAY))
         col.addView(hintText("填写 LibreTV 服务端的地址与访问密码"))
 
         val urlField = field(BuildConfig.DEFAULT_URL, prefs.serverUrl.ifEmpty { BuildConfig.DEFAULT_URL })
@@ -1380,7 +1386,7 @@ class MainActivity : Activity() {
             setPadding(dp(40), dp(20), dp(40), dp(16))
         }
         col.addView(brandRow(false))
-        col.addView(titleText("片源管理 · ${sources.size} 个（启用 $enabledCount）", 18f))
+        col.addView(titleText("片源管理 · ${sources.size} 个（启用 $enabledCount）", Theme.DISPLAY))
 
         val bar = LinearLayout(this).apply { orientation = LinearLayout.HORIZONTAL }
         bar.addView(button("添加片源", primary = true) { showAddSource() })
@@ -2084,7 +2090,6 @@ class MainActivity : Activity() {
                 .show()
         })
         bar.addView(button("‹ 返回搜索") { showHome() })
-        bar.addView(button("重新搜索") { showHome() })
         col.addView(hScroll(bar))
 
         if (sourceFilter.isNotEmpty()) {
@@ -2171,9 +2176,16 @@ class MainActivity : Activity() {
                 first.remarks.takeIf { it.isNotEmpty() },
             ).joinToString(" · ")
             val srcs = items.map { it.sourceName }.distinct()
-            (info.getChildAt(2) as TextView).text =
-                if (srcs.size > 1) "${srcs.size} 个来源 · ${srcs.joinToString(" / ")}"
-                else srcs.firstOrNull().orEmpty()
+            // 来源只列前两个 + 总数：长串会在卡片里折行，把三行信息挤成五行
+            (info.getChildAt(2) as TextView).apply {
+                text = when {
+                    srcs.size > 2 -> "${srcs.take(2).joinToString(" / ")} 等 ${srcs.size} 个来源"
+                    srcs.size == 2 -> srcs.joinToString(" / ")
+                    else -> srcs.firstOrNull().orEmpty()
+                }
+                maxLines = 1
+                ellipsize = android.text.TextUtils.TruncateAt.END
+            }
 
             poster.tag = first.pic
             poster.setImageBitmap(null)
@@ -2405,18 +2417,20 @@ class MainActivity : Activity() {
         currentScreen = "detail"
         val col = LinearLayout(this).apply {
             orientation = LinearLayout.VERTICAL
-            setPadding(dp(56), dp(28), dp(56), dp(28))
+            setPadding(dp(Theme.PAGE_X), dp(Theme.PAGE_Y), dp(Theme.PAGE_X), dp(20))
         }
+        col.addView(brandRow(false))
         val topBar = LinearLayout(this).apply {
             orientation = LinearLayout.HORIZONTAL
             gravity = Gravity.CENTER_VERTICAL
-            setPadding(0, 0, 0, dp(10))
+            setPadding(0, dp(4), 0, dp(12))
         }
         topBar.addView(button("‹ 返回") {
             if (detailFromResults && lastResults.isNotEmpty()) showResults() else showRecommend()
         })
+        topBar.addView(View(this), LinearLayout.LayoutParams(0, dp(1), 1f))
         topBar.addView(TextView(this).apply {
-            text = "  长按片名可加入片单"
+            text = "长按片名可加入片单"
             setTextSize(Theme.CAPTION)
             setTextColor(Theme.MUTED)
         })
@@ -2428,13 +2442,13 @@ class MainActivity : Activity() {
             scaleType = ImageView.ScaleType.CENTER_CROP
             setBackgroundColor(Theme.POSTER_BG)
         }
-        header.addView(cover, LinearLayout.LayoutParams(dp(150), dp(220)))
+        header.addView(cover, LinearLayout.LayoutParams(dp(132), dp(196)))
 
         val info = LinearLayout(this).apply {
             orientation = LinearLayout.VERTICAL
             setPadding(dp(24), 0, 0, 0)
         }
-        val titleView = titleText(detail.info.title.ifEmpty { item.name }, 24f)
+        val titleView = titleText(detail.info.title.ifEmpty { item.name }, Theme.DISPLAY)
         // 详情页也能收进片单：长按片名（和首页/结果页同一个手势）
         runCatching {
             val libItem = MovieItem(
@@ -2444,46 +2458,85 @@ class MainActivity : Activity() {
             PosterActions.attach(this, titleView, libItem, library)
         }
         info.addView(titleView)
-        info.addView(hintText(listOfNotNull(
-            detail.info.year.takeIf { it.isNotEmpty() },
-            detail.info.area.takeIf { it.isNotEmpty() },
-            detail.info.remarks.takeIf { it.isNotEmpty() },
-            item.sourceName,
-            "共 ${detail.episodes.size} 集",
-        ).joinToString(" · ")))
-        if (detail.info.desc.isNotEmpty()) {
+        info.addView(TextView(this).apply {
+            text = listOfNotNull(
+                detail.info.year.takeIf { it.isNotEmpty() },
+                detail.info.area.takeIf { it.isNotEmpty() },
+                detail.info.remarks.takeIf { it.isNotEmpty() },
+                item.sourceName,
+                "共 ${detail.episodes.size} 集",
+            ).joinToString("  ·  ")
+            setTextSize(Theme.CAPTION)
+            setTextColor(Theme.MUTED)
+            setPadding(0, dp(6), 0, dp(8))
+        })
+        val descText = stripHtml(detail.info.desc).trim()
+        if (descText.isNotEmpty() && descText != detail.info.title.ifEmpty { item.name }) {
             info.addView(TextView(this).apply {
-                setText(stripHtml(detail.info.desc))
+                setText(descText)
                 setTextColor(Theme.MUTED)
                 setTextSize(Theme.BODY)
                 maxLines = 5
             })
         }
+        // 主按钮：一键开播（有进度就从上次那集继续），比"在 100 个格子里找第几集"快得多
+        val resumeIdx = detail.episodes.indexOfFirst { prefs.progressOf(it) > 5000L }
+        val actions = LinearLayout(this).apply {
+            orientation = LinearLayout.HORIZONTAL
+            setPadding(0, dp(14), 0, dp(2))
+        }
+        actions.addView(button(
+            if (resumeIdx > 0) "▶ 继续第 ${resumeIdx + 1} 集" else "▶ 播放",
+            primary = true,
+        ) {
+            playFromList(
+                detail.episodes,
+                if (resumeIdx > 0) resumeIdx else 0,
+                detail.info.title.ifEmpty { item.name },
+                detail.info.cover.ifEmpty { item.pic },
+            )
+        })
+        actions.addView(button("加入片单") {
+            val t = detail.info.title.ifEmpty { item.name }
+            library.put(MovieItem(title = t, cover = detail.info.cover.ifEmpty { item.pic }), LibState.FAV)
+            library.event(t, 0)
+            toast("已加入「收藏」")
+        })
+        info.addView(actions)
+
         header.addView(info, LinearLayout.LayoutParams(
             0, ViewGroup.LayoutParams.WRAP_CONTENT, 1f))
         col.addView(header)
 
         val coverUrl = detail.info.cover.ifEmpty { item.pic }
         if (coverUrl.isNotEmpty()) {
-            imageLoader.load(coverUrl, dp(300), dp(440)) { bmp -> bmp?.let { cover.setImageBitmap(it) } }
+            imageLoader.load(coverUrl, dp(264), dp(392)) { bmp -> bmp?.let { cover.setImageBitmap(it) } }
         }
 
-        col.addView(hintText("选择集数（共 ${detail.episodes.size} 集）："))
 
-        // 换源：同一个片名在其他采集站的结果，一键切换（按来源名去重，避免同一站出现两次）
+        // 换源：同一个片名在其他采集站的结果（按来源去重）。做成一个按钮 + 弹窗，
+        // 而不是占满一整行的 chip —— 电视上垂直空间比水平空间稀缺。
         val alternatives = lastResults
             .filter { it.name == item.name }
             .distinctBy { it.sourceUrl }
         if (alternatives.size > 1) {
-            val row = LinearLayout(this).apply { orientation = LinearLayout.HORIZONTAL }
-            row.addView(hintText("来源："), LinearLayout.LayoutParams(dp(70), dp(44)))
-            alternatives.take(6).forEach { alt ->
-                row.addView(
-                    button((if (alt.sourceUrl == item.sourceUrl) "● " else "") + alt.sourceName.ifEmpty { "来源" }) { if (alt.sourceUrl != item.sourceUrl) openDetail(alt) },
-                )
-            }
-            col.addView(hScroll(row))
+            actions.addView(button("换源 ${alternatives.size}") {
+                val names = alternatives.map {
+                    (if (it.sourceUrl == item.sourceUrl) "● " else "    ") + it.sourceName.ifEmpty { "来源" }
+                }
+                AlertDialog.Builder(this)
+                    .setTitle("选一个采集站")
+                    .setItems(names.toTypedArray()) { _, which ->
+                        val alt = alternatives[which]
+                        if (alt.sourceUrl != item.sourceUrl) openDetail(alt)
+                    }
+                    .show()
+            })
         }
+
+        col.addView(Theme.rowHeader(this, "选集", "共 ${detail.episodes.size} 集").apply {
+            setPadding(0, dp(10), 0, dp(8))
+        })
 
         val epGrid = newGrid().apply {
             numColumns = 8
@@ -2497,9 +2550,11 @@ class MainActivity : Activity() {
             override fun getView(position: Int, convertView: View?, parent: ViewGroup): View {
                 val tv = (convertView as? TextView) ?: TextView(this@MainActivity).apply {
                     gravity = Gravity.CENTER
-                    setTextSize(14f)
-                    setTextColor(TEXT_COLOR)
-                    setPadding(dp(6), dp(14), dp(6), dp(14))
+                    setTextSize(Theme.BODY)
+                    setTextColor(Theme.INK)
+                    setPadding(dp(6), dp(16), dp(6), dp(16))
+                    // 集数格子必须有"卡片感"，否则 8 列下来像一排散落的文字
+                    applyFocusStyle(this, Theme.PANEL, this, focusScale = 1f)
                 }
                 // CMS 的集数标题常常带一段哈希（第1集$4ad62e），这里只保留序号
                 tv.text = "第 ${position + 1} 集"
@@ -2577,35 +2632,67 @@ class MainActivity : Activity() {
             setPadding(dp(Theme.PAGE_X), dp(Theme.PAGE_Y), dp(Theme.PAGE_X), dp(20))
         }
         col.addView(brandRow(false))
-        val shown = if (liveGroupFilter.isEmpty()) {
-            liveChannels
-        } else {
-            liveChannels.filter { it.group == liveGroupFilter }
+
+        val groups = liveChannels.groupBy { it.group.ifEmpty { "其他" } }
+            .mapValues { it.value.size }
+
+        // 500 多个频道平铺一列 = 遥控器灾难。首次进页直接落到第一个分组，
+        // 想看全部再点「全部」—— 让默认动作是"缩小范围"而不是"从头滚"。
+        if (liveGroupAuto && groups.size > 2 && liveChannels.size > 60) {
+            // 默认组按"用户最可能先看什么"选：央视 > 卫视 > 人最多的组
+            liveGroupFilter = listOf("央视频道", "卫视频道").firstOrNull { groups.containsKey(it) }
+                ?: groups.maxByOrNull { it.value }?.key.orEmpty()
+            liveGroupAuto = false
         }
-        col.addView(titleText("直播  ·  ${shown.size}/${liveChannels.size} 个频道", 20f))
 
-        val bar = LinearLayout(this).apply { orientation = LinearLayout.HORIZONTAL }
-        bar.addView(button("换源") { pickLiveSource() })
-        bar.addView(button("添加直播源") { addLiveDialog() })
-        bar.addView(
-            button(if (liveGroupFilter.isEmpty()) "分组" else "分组：" + liveGroupFilter.take(10)) {
-                val groups = listOf("全部分组") + liveChannels.map { it.group }.distinct().sorted()
-                AlertDialog.Builder(this)
-                    .setTitle("按分组筛选")
-                    .setItems(groups.toTypedArray()) { _, which ->
-                        liveGroupFilter = if (which == 0) "" else groups[which]
-                        showLive()
-                    }
-                    .show()
-            },
+        val shown = if (liveGroupFilter.isEmpty()) liveChannels
+        else liveChannels.filter { it.group.ifEmpty { "其他" } == liveGroupFilter }
+
+        val head = LinearLayout(this).apply {
+            orientation = LinearLayout.HORIZONTAL
+            gravity = Gravity.CENTER_VERTICAL
+        }
+        head.addView(titleText("直播", Theme.DISPLAY))
+        head.addView(TextView(this).apply {
+            text = "  ·  ${shown.size} / ${liveChannels.size} 个频道"
+            setTextSize(Theme.CAPTION)
+            setTextColor(Theme.MUTED)
+        })
+        head.addView(View(this), LinearLayout.LayoutParams(0, dp(1), 1f))
+        head.addView(button("换源") { pickLiveSource() })
+        head.addView(button("添加源") { addLiveDialog() })
+        head.addView(button("‹ 返回") { showRecommend() })
+        col.addView(head)
+
+        // 分组 chip 条：一眼看到有哪些组、各有多少个
+        val chips = LinearLayout(this).apply {
+            orientation = LinearLayout.HORIZONTAL
+            setPadding(0, dp(10), 0, dp(8))
+        }
+        fun chip(label: String, active: Boolean, onClick: () -> Unit) {
+            chips.addView(Theme.pill(this, label, active).apply {
+                setOnClickListener { onClick() }
+            })
+        }
+        chip("全部 ${liveChannels.size}", liveGroupFilter.isEmpty()) {
+            liveGroupFilter = ""; liveGroupAuto = false; showLive()
+        }
+        groups.entries.sortedBy { it.key }.forEach { (g, n) ->
+            chip("$g $n", liveGroupFilter == g) {
+                liveGroupFilter = g; liveGroupAuto = false; showLive()
+            }
+        }
+        col.addView(hScroll(chips))
+
+        // 频道名里的数字按数值排：CCTV3 在 CCTV12 前面，而不是字典序
+        val sorted = shown.sortedWith(
+            compareBy({ it.group }, { Regex("\\d+").replace(it.name) { m -> m.value.padStart(4, '0') } }),
         )
-        bar.addView(button("返回") { showRecommend() })
-        col.addView(hScroll(bar))
-
-        val sorted = shown.sortedWith(compareBy({ it.group }, { it.name }))
         val listView = newList()
-        bindList(listView, 
-            sorted.map { "${it.group}  ·  ${it.name}" },
+        bindList(listView,
+            sorted.map {
+                if (liveGroupFilter.isEmpty()) "${it.group.ifEmpty { "其他" }}  ·  ${it.name}" else it.name
+            },
             onItem = { idx -> play(sorted[idx].url, sorted[idx].name) },
         )
         col.addView(listView, LinearLayout.LayoutParams(
@@ -2627,6 +2714,8 @@ class MainActivity : Activity() {
                 prefs.activeLiveUrl = urls[which]
                 liveChannels = emptyList()
                 liveChannelSource = ""
+                liveGroupAuto = true
+                liveGroupFilter = ""
                 showLive()
             }
             .setPositiveButton("添加新的", { _, _ -> addLiveDialog() })
@@ -3059,10 +3148,11 @@ class MainActivity : Activity() {
             override fun getItemId(position: Int) = position.toLong()
             override fun getView(position: Int, convertView: View?, parent: ViewGroup): View {
                 val tv = (convertView as? TextView) ?: TextView(this@MainActivity).apply {
-                    setTextSize(17f)
-                    setPadding(dp(18), dp(12), dp(18), dp(12))
+                    setTextSize(Theme.LIST)
+                    setTextColor(Theme.INK)
+                    setPadding(dp(16), dp(15), dp(16), dp(15))
                     isFocusable = true
-                    isFocusableInTouchMode = true
+                    isFocusableInTouchMode = false
                 }
                 tv.text = items[position]
                 tv.setOnClickListener { onItem(position) }

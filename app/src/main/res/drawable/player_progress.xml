@@ -1,15 +1,16 @@
 <?xml version="1.0" encoding="utf-8"?>
 <layer-list xmlns:android="http://schemas.android.com/apk/res/android">
+    <!-- 轨道压暗、缓冲中灰、已播放用品牌色：三层一眼分得开 -->
     <item android:id="@android:id/background">
         <shape>
-            <solid android:color="#4B5563" />
+            <solid android:color="#22304A" />
             <corners android:radius="3dp" />
         </shape>
     </item>
     <item android:id="@android:id/secondaryProgress">
         <clip>
             <shape>
-                <solid android:color="#E5E7EB" />
+                <solid android:color="#475569" />
                 <corners android:radius="3dp" />
             </shape>
         </clip>

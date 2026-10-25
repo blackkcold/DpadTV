@@ -37,6 +37,7 @@ object Theme {
     const val TITLE = 18f        // 区块标题 / 行标题
     const val BODY = 15f         // 正文、按钮
     const val INPUT = 18f        // 输入框
+    const val LIST = 16f         // 列表行
     const val CAPTION = 12.5f    // 状态、计数、副标题
     const val MICRO = 10.5f      // 角标
 

@@ -162,9 +162,14 @@ class PlayerActivity : Activity() {
         titleText = TextView(this).apply {
             baseText = labelFor(currentIndex)
             setText(baseText)
-            setTextColor(android.graphics.Color.parseColor("#cbd5e1"))
-            setTextSize(14f)
-            setPadding(48, 28, 48, 0)
+            setTextColor(Theme.INK)
+            setTextSize(Theme.TITLE)
+            // 顶部压一层渐变：亮画面上白字会糊掉，这块"幕布"只在显示标题时出现
+            background = android.graphics.drawable.GradientDrawable(
+                android.graphics.drawable.GradientDrawable.Orientation.TOP_BOTTOM,
+                intArrayOf(0xD9000000.toInt(), 0x00000000),
+            )
+            setPadding(dp(48), dp(22), dp(48), dp(26))
             visibility = View.GONE
         }
         root.addView(
@@ -193,9 +198,9 @@ class PlayerActivity : Activity() {
             layoutParams = LinearLayout.LayoutParams(0, LinearLayout.LayoutParams.WRAP_CONTENT, 1f)
         }
         timeText = TextView(this).apply {
-            setTextColor(android.graphics.Color.WHITE)
-            setTextSize(14f)
-            setPadding(24, 0, 0, 0)
+            setTextColor(Theme.INK)
+            setTextSize(Theme.CAPTION)
+            setPadding(dp(24), 0, 0, 0)
         }
         progressRow.addView(
             playPauseIcon,
@@ -217,19 +222,19 @@ class PlayerActivity : Activity() {
 
         // 底部操作栏（默认隐藏）
         actionBar = LinearLayout(this).apply { orientation = LinearLayout.HORIZONTAL }
-        actionBar.addView(actionButton("下集") {
-            if (player?.hasNextMediaItem() == true) {
-                player?.seekToNextMediaItem()
-            } else {
-                toast("已是最后一集")
-            }
-            showActions()
-        })
         actionBar.addView(actionButton("上集") {
             if (player?.hasPreviousMediaItem() == true) {
                 player?.seekToPreviousMediaItem()
             } else {
                 toast("已是第一集")
+            }
+            showActions()
+        })
+        actionBar.addView(actionButton("下集") {
+            if (player?.hasNextMediaItem() == true) {
+                player?.seekToNextMediaItem()
+            } else {
+                toast("已是最后一集")
             }
             showActions()
         })
@@ -270,14 +275,14 @@ class PlayerActivity : Activity() {
         // 缓冲提示 + 网速
         bufferingText = TextView(this).apply {
             setText("缓冲中…")
-            setTextColor(android.graphics.Color.parseColor("#cbd5e1"))
-            setTextSize(18f)
+            setTextColor(Theme.INK)
+            setTextSize(Theme.TITLE)
             visibility = View.VISIBLE
         }
         speedText = TextView(this).apply {
             setText("测速中…")
-            setTextColor(android.graphics.Color.parseColor("#94a3b8"))
-            setTextSize(13f)
+            setTextColor(Theme.MUTED)
+            setTextSize(Theme.CAPTION)
             setPadding(0, dp(6), 0, 0)
             visibility = View.VISIBLE
         }
@@ -338,7 +343,7 @@ class PlayerActivity : Activity() {
                         baseText = labelFor(currentIndex)
                         if (!hasError) {
                             titleText.text = baseText
-                            titleText.setTextColor(android.graphics.Color.parseColor("#cbd5e1"))
+                            titleText.setTextColor(Theme.INK)
                         }
                         bufferingText.visibility = View.VISIBLE
                         updateChrome()
@@ -378,7 +383,7 @@ class PlayerActivity : Activity() {
                         hasError = true
                         baseText = msg
                         titleText.text = msg
-                        titleText.setTextColor(android.graphics.Color.parseColor("#fca5a5"))
+                        titleText.setTextColor(Theme.DANGER)
                         bufferingText.visibility = View.GONE
                         speedText.visibility = View.GONE
                         updateChrome()
@@ -445,7 +450,7 @@ class PlayerActivity : Activity() {
         val bmp = android.graphics.Bitmap.createBitmap(size, size, android.graphics.Bitmap.Config.ARGB_8888)
         val c = android.graphics.Canvas(bmp)
         val paint = android.graphics.Paint(android.graphics.Paint.ANTI_ALIAS_FLAG).apply {
-            color = android.graphics.Color.parseColor("#e5e7eb")
+            color = Theme.INK
             style = android.graphics.Paint.Style.FILL
         }
         if (paused) {
@@ -522,16 +527,18 @@ class PlayerActivity : Activity() {
 
     private fun actionButton(label: String, onClick: () -> Unit): TextView = TextView(this).apply {
         text = label
-        setTextColor(0xFFE5E7EB.toInt())
-        setTextSize(14f)
+        setTextColor(Theme.INK)
+        setTextSize(Theme.BODY)
         setPadding(dp(22), dp(12), dp(22), dp(12))
         val normal = android.graphics.drawable.GradientDrawable().apply {
-            setColor(0xFF2B3A52.toInt())
+            setColor(Theme.PANEL)
             cornerRadius = dp(8).toFloat()
         }
+        // 和全站一致：焦点只加亮色描边，不换填充色（蓝底在暗场景里太跳）
         val focused = android.graphics.drawable.GradientDrawable().apply {
-            setColor(0xFF3E7FD4.toInt())
+            setColor(Theme.PANEL)
             cornerRadius = dp(8).toFloat()
+            setStroke(dp(3), Theme.ACCENT)
         }
         background = normal
         isFocusable = true
