@@ -63,9 +63,9 @@
 <body>
 <div class="wrap">
 
-  <div class="label">Audit · 2026-10-25 · 只读复核 · 未改代码</div>
+  <div class="label">Audit + Delivery · 2026-10-25 · 已落地</div>
   <h1>筛选慢、没高亮：三个症状，两个根因</h1>
-  <p class="sub">BrowseScreen / CollectionRepo / sidecar 全链路走一遍 · 基线 <code>e6165ce</code> · 结论：该内置的不是客户端，是<b>榜单索引</b></p>
+  <p class="sub">已修筛选高亮/加载态/重试，榜单改为内置索引（1452 条 / 45KB），sidecar 已从代码、仓库、路由器上移除 · 36 单测通过</p>
 
   <div class="kpis">
     <div class="kpi"><div class="v mono">2</div><div class="k">独立根因<br>1 个 UI bug + 1 个架构</div></div>
@@ -164,7 +164,7 @@
 
   <div class="foot">
     <span>完整审计：<code>docs/AUDIT-BROWSE-SIDECAR.md</code></span>
-    <span class="mono">只读复核 · 未改代码 · 未动侧车</span>
+    <span class="mono">1452 条索引 · 45KB · sidecar 已下线</span>
   </div>
 
 </div>
