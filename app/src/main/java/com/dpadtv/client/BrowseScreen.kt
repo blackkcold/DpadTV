@@ -34,6 +34,7 @@ class BrowseScreen(
     private val store: LibraryStore,
     private val shelf: Shelf,
     private val initial: List<MovieItem> = emptyList(),
+    private val onBack: () -> Unit = {},
     private val onOpenTitle: (String) -> Unit,
 ) {
 
@@ -87,8 +88,13 @@ class BrowseScreen(
         head.addView(status)
         head.addView(View(host), LinearLayout.LayoutParams(0, 1, 1f))
         head.addView(TextView(host).apply {
-            text = "返回 = 回首页"
-            setTextSize(12f); setTextColor(muted)
+            text = "‹ 返回首页"
+            setTextSize(13.5f); setTextColor(ink)
+            isFocusable = true
+            isFocusableInTouchMode = false
+            setPadding(dp(13), dp(6), dp(13), dp(6))
+            setOnClickListener { onBack() }
+            setOnFocusChangeListener { v, f -> v.background = pill(if (f) accent else Color.TRANSPARENT, if (f) accent else Color.TRANSPARENT) }
         })
         col.addView(head)
 
@@ -183,7 +189,7 @@ class BrowseScreen(
         setTextSize(13f)
         setTextColor(if (on) Color.parseColor("#04121B") else ink)
         isFocusable = true
-        isFocusableInTouchMode = true
+        isFocusableInTouchMode = false
         setPadding(dp(15), dp(8), dp(15), dp(8))
         background = pill(if (on) accent else panel)
         setOnClickListener { click() }

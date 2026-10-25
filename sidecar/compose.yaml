@@ -9,6 +9,7 @@ services:
       CACHE_DIR: /data/cache
       TTL_SECONDS: "86400"
       MIN_GAP_MS: "6000"
+      ALLOW_UPSTREAM: "0"
     command: ["node", "/app/server.js"]
     volumes:
       - /overlay/upper/opt/docker/Configs/douban-cache:/data

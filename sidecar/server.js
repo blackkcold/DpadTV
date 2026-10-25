@@ -18,6 +18,8 @@ const PORT = Number(process.env.PORT || 8898);
 const DIR = process.env.CACHE_DIR || '/data/cache';
 const TTL = Number(process.env.TTL_SECONDS || 86400) * 1000;
 const GAP = Number(process.env.MIN_GAP_MS || 2500);
+// 0 = 只读缓存，绝不访问豆瓣（开发/验收期用这个模式）
+const ALLOW_UPSTREAM = process.env.ALLOW_UPSTREAM !== '0';
 const UA = 'Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/122.0.0.0 Safari/537.36';
 
 fs.mkdirSync(DIR, { recursive: true });
@@ -99,6 +101,16 @@ const server = http.createServer(async (req, res) => {
     return send(res, 200, hit.body);
   }
 
+  if (!ALLOW_UPSTREAM) {
+    const stale = readCache(k);
+    if (stale) {
+      res.setHeader('X-Cache', 'stale-offline');
+      return send(res, 200, stale.body);
+    }
+    res.setHeader('X-Cache', 'offline-miss');
+    return send(res, 200, JSON.stringify({ msg: 'offline mode: no upstream access', r: 1 }));
+  }
+
   if (inflight.has(k)) {
     try {
       const body = await inflight.get(k);
@@ -135,13 +147,14 @@ function send(res, code, body) {
   res.end(body);
 }
 
-server.listen(PORT, '0.0.0.0', () => console.log(`douban sidecar on :${PORT}, cache=${DIR}, ttl=${TTL / 1000}s, gap=${GAP}ms`));
+server.listen(PORT, '0.0.0.0', () => console.log(`douban sidecar on :${PORT}, cache=${DIR}, ttl=${TTL / 1000}s, gap=${GAP}ms, upstream=${ALLOW_UPSTREAM ? 'on' : 'OFF(cache-only)'}`));
 
 /**
  * 补课循环：限流期间没抓到的 URL 记在 pending.json，每 10 分钟试一次（一次只试一个），
  * 抓到就写缓存并出队。这样客户端不需要为"当时被限流"负责，下次打开自然就有。
  */
 setInterval(async () => {
+  if (!ALLOW_UPSTREAM) return;
   const list = loadPending();
   if (!list.length) return;
   const p = list[0];

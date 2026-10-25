@@ -59,6 +59,16 @@ class LibraryScreen(
         head.addView(status)
         head.addView(View(host), LinearLayout.LayoutParams(0, 1, 1f))
         head.addView(TextView(host).apply {
+            text = "‹ 返回首页"
+            setTextSize(13.5f)
+            setTextColor(ink)
+            isFocusable = true
+            isFocusableInTouchMode = false
+            setPadding(dp(13), dp(6), dp(13), dp(6))
+            setOnClickListener { onBack() }
+            setOnFocusChangeListener { v, f -> v.background = pill(if (f) accent else Color.TRANSPARENT, if (f) accent else Color.TRANSPARENT) }
+        })
+        head.addView(TextView(host).apply {
             text = "长按 OK 改状态"
             setTextSize(12f)
             setTextColor(muted)
@@ -118,7 +128,7 @@ class LibraryScreen(
         setTextSize(13f)
         setTextColor(if (on) Color.parseColor("#04121B") else ink)
         isFocusable = true
-        isFocusableInTouchMode = true
+        isFocusableInTouchMode = false
         setPadding(dp(15), dp(8), dp(15), dp(8))
         background = pill(if (on) accent else panel)
         setOnClickListener { click() }

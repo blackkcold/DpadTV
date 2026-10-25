@@ -17,7 +17,7 @@ android {
     }
 
     defaultConfig {
-        applicationId = "com.dpadtv.client"
+        applicationId = "com.dpadtv.client.pro"
         // 23 = Android 6.0：Media3 的下限之上，老盒子都能装
         minSdk = 23
         targetSdk = 37

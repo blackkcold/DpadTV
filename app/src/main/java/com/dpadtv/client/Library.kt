@@ -30,6 +30,8 @@ data class LibEntry(
     val rating: Double,
     val state: LibState,
     val updatedAt: Long,
+    /** 来自哪个榜单（ref id），推荐画像的唯一特征 */
+    val source: String = "",
 ) {
     fun toItem(): MovieItem = MovieItem(
         title = title,
@@ -44,7 +46,7 @@ data class LibEntry(
  * 片单存储：手写 SQLite（**不引 Room**：项目零注解处理，加 KSP 的构建风险大于收益）。
  * 主键是 title —— 播放链路本来就是按片名聚合搜索，title 才是这个 App 的真正 ID。
  */
-class LibraryStore(ctx: Context) : SQLiteOpenHelper(ctx.applicationContext, DB, null, 1) {
+class LibraryStore(ctx: Context) : SQLiteOpenHelper(ctx.applicationContext, DB, null, 3) {
 
     override fun onCreate(db: SQLiteDatabase) {
         db.execSQL(
@@ -54,13 +56,23 @@ class LibraryStore(ctx: Context) : SQLiteOpenHelper(ctx.applicationContext, DB, 
                  douban_id TEXT NOT NULL DEFAULT '',
                  rating REAL NOT NULL DEFAULT 0,
                  state INTEGER NOT NULL DEFAULT 0,
-                 updated_at INTEGER NOT NULL DEFAULT 0
+                 updated_at INTEGER NOT NULL DEFAULT 0,
+                 source TEXT NOT NULL DEFAULT ''
                )""",
         )
         db.execSQL("CREATE INDEX idx_lib_state ON lib(state, updated_at DESC)")
+        db.execSQL("CREATE TABLE ev(id INTEGER PRIMARY KEY AUTOINCREMENT, title TEXT, kind INTEGER, ts INTEGER)")
+        db.execSQL("CREATE INDEX idx_ev_ts ON ev(ts DESC)")
     }
 
-    override fun onUpgrade(db: SQLiteDatabase, oldVersion: Int, newVersion: Int) = Unit
+    override fun onUpgrade(db: SQLiteDatabase, oldVersion: Int, newVersion: Int) {
+        if (oldVersion < 3) {
+            // v2 的 onCreate 漏了 source 列（新建库会踩），这里兜一次
+            runCatching { db.execSQL("ALTER TABLE lib ADD COLUMN source TEXT NOT NULL DEFAULT ''") }
+            db.execSQL("CREATE TABLE IF NOT EXISTS ev(id INTEGER PRIMARY KEY AUTOINCREMENT, title TEXT, kind INTEGER, ts INTEGER)")
+            db.execSQL("CREATE INDEX IF NOT EXISTS idx_ev_ts ON ev(ts DESC)")
+        }
+    }
 
     fun stateOf(title: String): LibState? = readableDatabase
         .rawQuery("SELECT state FROM lib WHERE title = ?", arrayOf(title))
@@ -86,6 +98,7 @@ class LibraryStore(ctx: Context) : SQLiteOpenHelper(ctx.applicationContext, DB, 
             put("rating", item.rating)
             put("state", state.code)
             put("updated_at", System.currentTimeMillis())
+            put("source", item.from)
         }
         writableDatabase.insertWithOnConflict("lib", null, cv, SQLiteDatabase.CONFLICT_REPLACE)
     }
@@ -98,7 +111,7 @@ class LibraryStore(ctx: Context) : SQLiteOpenHelper(ctx.applicationContext, DB, 
         val (where, args) = if (state == null) "" to emptyArray<String>()
         else "WHERE state = ?" to arrayOf(state.code.toString())
         return readableDatabase
-            .rawQuery("SELECT title, cover, douban_id, rating, state, updated_at FROM lib $where ORDER BY updated_at DESC LIMIT $limit", args)
+            .rawQuery("SELECT title, cover, douban_id, rating, state, updated_at, COALESCE(source,'') FROM lib $where ORDER BY updated_at DESC LIMIT $limit", args)
             .use { c ->
                 buildList {
                     while (c.moveToNext()) {
@@ -110,6 +123,7 @@ class LibraryStore(ctx: Context) : SQLiteOpenHelper(ctx.applicationContext, DB, 
                                 rating = c.getDouble(3),
                                 state = LibState.of(c.getInt(4)),
                                 updatedAt = c.getLong(5),
+                                source = c.getString(6),
                             ),
                         )
                     }
@@ -125,6 +139,23 @@ class LibraryStore(ctx: Context) : SQLiteOpenHelper(ctx.applicationContext, DB, 
         }
         return m
     }
+
+    /** 行为事件：0=标记 1=开始播放 2=播完 */
+    fun event(title: String, kind: Int) {
+        writableDatabase.execSQL(
+            "INSERT INTO ev(title, kind, ts) VALUES(?,?,?)",
+            arrayOf(title, kind, System.currentTimeMillis()),
+        )
+    }
+
+    fun playCount(title: String): Int = readableDatabase
+        .rawQuery("SELECT COUNT(*) FROM ev WHERE title = ? AND kind = 1", arrayOf(title))
+        .use { if (it.moveToFirst()) it.getInt(0) else 0 }
+
+    /** 推荐引擎的「信号量」：片单条目 + 播放次数，都算用户表达过兴趣 */
+    fun signals(): Int = readableDatabase.rawQuery(
+        "SELECT (SELECT COUNT(*) FROM lib) + (SELECT COUNT(*) FROM ev WHERE kind = 1)", null,
+    ).use { if (it.moveToFirst()) it.getInt(0) else 0 }
 
     suspend fun <T> io(block: () -> T): T = withContext(Dispatchers.IO) { block() }
 

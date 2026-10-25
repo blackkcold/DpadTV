@@ -33,6 +33,7 @@ class ShelvesScreen(
     private val onOpenTitle: (String) -> Unit,
     private val onMore: (Shelf) -> Unit,
     private val onLibrary: () -> Unit,
+    private val nav: List<Pair<String, () -> Unit>> = emptyList(),
 ) {
 
     private val scope = CoroutineScope(SupervisorJob() + Dispatchers.Main)
@@ -43,6 +44,8 @@ class ShelvesScreen(
 
     private fun dp(v: Int) = (v * host.resources.displayMetrics.density).toInt()
 
+    private val pool = LinkedHashMap<String, MovieItem>()
+    private var recommendView: View? = null
     private var page: LinearLayout? = null
     private var libraryView: View? = null
 
@@ -64,14 +67,71 @@ class ShelvesScreen(
         scope.launch {
             for (row in rows) {
                 val groups = row.shelf.refs.map { ref -> ref to repo.fetch(ref) }
-                render(row, Merger.merge(groups, row.shelf.size))
+                var merged = Merger.merge(groups, row.shelf.size)
+                if (row.shelf.id == "tv") merged = merged.filterNot { Merger.isAnimation(it.title) }
+                render(row, merged)
+                merged.forEach { pool.putIfAbsent(Merger.normalize(it.title), it) }
             }
+            buildRecommendRow()
         }
-        return ScrollView(host).apply {
+        val root = ScrollView(host).apply {
             isFillViewport = true
             setBackgroundColor(Color.parseColor("#0b1220"))
             addView(col)
         }
+        root.postDelayed({
+            rows.firstOrNull()?.strip?.getChildAt(0)?.requestFocus()
+        }, 260)
+        return root
+    }
+
+    /**
+     * 「为你推荐」：信号不足（< 8）整行不出现 —— 一行平庸的推荐比没有更伤。
+     * 候选池用首页已经拉到的全部条目，不额外发请求。
+     */
+    private fun buildRecommendRow() {
+        val p = page ?: return
+        if (recommendView != null) return
+        if (!Recommend.enough(store.signals())) return
+        val owned = store.list(null, 500).map { Merger.normalize(it.title) }.toHashSet()
+        val cands = pool.values.filter { Merger.normalize(it.title) !in owned }
+        if (cands.size < 6) return
+        val taste = Recommend.taste(store.list(null, 500))
+        val picked = Recommend.mmr(cands, taste, 14)
+        if (picked.isEmpty()) return
+
+        val box = LinearLayout(host).apply {
+            orientation = LinearLayout.VERTICAL
+            setPadding(0, dp(2), 0, dp(14))
+        }
+        val head = LinearLayout(host).apply {
+            orientation = LinearLayout.HORIZONTAL
+            gravity = Gravity.CENTER_VERTICAL
+            setPadding(0, 0, 0, dp(8))
+        }
+        head.addView(TextView(host).apply {
+            text = "为你推荐"
+            setTextSize(18f)
+            setTextColor(ink)
+        })
+        head.addView(TextView(host).apply {
+            text = "  · 按你的片单和播放记录挑的"
+            setTextSize(12.5f)
+            setTextColor(muted)
+        })
+        box.addView(head)
+        val strip = LinearLayout(host).apply {
+            orientation = LinearLayout.HORIZONTAL
+            setPadding(0, dp(2), 0, 0)
+        }
+        picked.forEach { strip.addView(posterCell(it)) }
+        box.addView(HorizontalScrollView(host).apply {
+            isHorizontalScrollBarEnabled = false
+            addView(strip)
+        })
+        recommendView = box
+        // 放在「我的片单」之后、公共榜之前：个性化内容应该一眼看到，但不能盖住自己的片单
+        p.addView(box, minOf(p.childCount, 2))
     }
 
     /**
@@ -116,7 +176,7 @@ class ShelvesScreen(
             setTextSize(14f)
             setTextColor(muted)
             isFocusable = true
-            isFocusableInTouchMode = true
+            isFocusableInTouchMode = false
             setPadding(dp(14), dp(6), dp(14), dp(6))
             setOnClickListener { onLibrary() }
             setOnFocusChangeListener { v, f -> v.background = ring(if (f) accent else Color.TRANSPARENT) }
@@ -128,6 +188,16 @@ class ShelvesScreen(
             setPadding(0, dp(2), 0, 0)
         }
         entries.forEach { e -> strip.addView(posterCell(e.toItem(), dominantBadge = "")) }
+        if (entries.size < 4) {
+            strip.addView(TextView(host).apply {
+                text = "长按\n海报\n加入"
+                gravity = Gravity.CENTER
+                setTextSize(12f)
+                setTextColor(muted)
+                background = rounded(panel, dp(8))
+                layoutParams = LinearLayout.LayoutParams(dp(72), dp(204)).apply { leftMargin = dp(8) }
+            })
+        }
         box.addView(HorizontalScrollView(host).apply {
             isHorizontalScrollBarEnabled = false
             addView(strip)
@@ -156,11 +226,31 @@ class ShelvesScreen(
             setPadding(dp(10), 0, dp(14), 0)
         })
         row.addView(TextView(host).apply {
-            text = "豆瓣榜单 · 合并货架"
+            text = "今晚看点什么"
             setTextSize(12.5f)
             setTextColor(muted)
         })
+        // 顶部导航：M1 换掉旧首页时把入口一起弄丢了，电视上没有地址栏，必须有常驻入口
+        row.addView(View(host), LinearLayout.LayoutParams(0, 1, 1f))
+        nav.forEach { (label, action) ->
+            row.addView(navPill(label, action))
+        }
         return row
+    }
+
+    private fun navPill(label: String, action: () -> Unit): View = TextView(host).apply {
+        text = label
+        setTextSize(13.5f)
+        setTextColor(ink)
+        isFocusable = true
+        // 触摸模式下点一下就直接触发，不要"先聚焦再点一次"
+        isFocusableInTouchMode = false
+        setPadding(dp(13), dp(6), dp(13), dp(6))
+        setOnClickListener { action() }
+        setOnFocusChangeListener { v, f -> v.background = pill(if (f) accent else Color.TRANSPARENT, if (f) accent else Color.TRANSPARENT) }
+        layoutParams = LinearLayout.LayoutParams(
+            ViewGroup.LayoutParams.WRAP_CONTENT, ViewGroup.LayoutParams.WRAP_CONTENT,
+        ).apply { leftMargin = dp(4) }
     }
 
     private class Row(val shelf: Shelf, val strip: LinearLayout, val count: TextView)
@@ -227,7 +317,7 @@ class ShelvesScreen(
         setTextSize(14f)
         setTextColor(muted)
         isFocusable = true
-        isFocusableInTouchMode = true
+        isFocusableInTouchMode = false
         setPadding(dp(14), dp(6), dp(14), dp(6))
         setOnClickListener { onMore(shelf) }
         setOnFocusChangeListener { v, focused -> v.background = ring(if (focused) accent else Color.TRANSPARENT) }
@@ -238,7 +328,7 @@ class ShelvesScreen(
             orientation = LinearLayout.VERTICAL
             setPadding(dp(5), dp(4), dp(5), dp(4))
             isFocusable = true
-            isFocusableInTouchMode = true
+            isFocusableInTouchMode = false
         }
         val frame = FrameLayout(host).apply {
             layoutParams = LinearLayout.LayoutParams(dp(146), dp(204))
@@ -336,6 +426,12 @@ class ShelvesScreen(
         layoutParams = LinearLayout.LayoutParams(dp(64), dp(204)).apply { leftMargin = dp(8) }
         setOnClickListener { onMore(shelf) }
         setOnFocusChangeListener { v, f -> v.background = ring(if (f) accent else Color.TRANSPARENT, base = panel) }
+    }
+
+    private fun pill(fill: Int, stroke: Int): GradientDrawable = GradientDrawable().apply {
+        setColor(fill)
+        cornerRadius = dp(8).toFloat()
+        if (stroke != Color.TRANSPARENT) setStroke(dp(2), stroke)
     }
 
     private fun rounded(color: Int, radius: Int): GradientDrawable = GradientDrawable().apply {

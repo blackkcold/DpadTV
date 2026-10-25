@@ -228,6 +228,11 @@ class MainActivity : Activity() {
     }
 
     private fun hideSystemUi() {
+        // Android 11+：老的 systemUiVisibility 在 targetSdk 35+ 上会被逐步忽略，
+        // 不显式关掉 decorFitsSystemWindows 就会在顶部留下一条 64dp 黑边（实测 128px/1080p）
+        if (android.os.Build.VERSION.SDK_INT >= 30) {
+            window.setDecorFitsSystemWindows(false)
+        }
         @Suppress("DEPRECATION")
         window.decorView.systemUiVisibility = (
             View.SYSTEM_UI_FLAG_LAYOUT_STABLE
@@ -261,7 +266,7 @@ class MainActivity : Activity() {
             "detail", "live", "setup", "history" -> showRecommend()
             "sources" -> if (sourcesOrigin == "setup") showSetup() else showRecommend()
             "home", "recommend", "shelves" -> super.onBackPressed()
-            "browse" -> showShelves()
+            "browse", "library" -> showShelves()
             // 导入流程内的页面：逐级退回上一级，而不是退出 App
             "input" -> showAddSource()
             "manualadd" -> showAddSource()
@@ -2138,7 +2143,11 @@ class MainActivity : Activity() {
 
         val header = LinearLayout(this).apply { orientation = LinearLayout.HORIZONTAL }
         col.addView(brandRow(false))
-        val keywordField = field("输入影片名称…")
+        val keywordField = field("输入影片名称…").apply {
+            // 横屏单行输入框会被输入法切成「全屏提取模式」，整页被白底键盘盖住；
+            // 明确告诉 IME 不要走提取模式，输入时还能看见页面上下的热门/历史
+            imeOptions = imeOptions or android.view.inputmethod.EditorInfo.IME_FLAG_NO_EXTRACT_UI
+        }
         keywordField.imeOptions = EditorInfo.IME_ACTION_SEARCH
         header.addView(keywordField, LinearLayout.LayoutParams(dp(580), dp(48)))
         header.addView(button("搜索", primary = true) { doSearch(keywordField.text.toString()) })
@@ -2252,7 +2261,8 @@ class MainActivity : Activity() {
         }
 
         setScreen(col)
-        if (lastResults.isEmpty()) keywordField.requestFocus() else listView.requestFocus()
+        // 默认焦点给列表/历史，**不要**落到输入框上——电视上一进页面就弹全屏键盘会把内容全挡掉
+        listView.requestFocus()
     }
 
     private fun doSearch(keyword: String) {
@@ -2425,6 +2435,14 @@ class MainActivity : Activity() {
     /** 整季播放：把整个集数列表交给播放器，一集放完自动进下一集 */
     private fun playFromList(urls: List<String>, index: Int, title: String, cover: String = "") {
         if (urls.isEmpty()) return
+        // 点开播放 = 明确的兴趣信号：自动落到「在看」，并记一条事件（推荐画像用）
+        runCatching {
+            library.put(
+                MovieItem(title = title, cover = cover),
+                LibState.WATCHING,
+            )
+            library.event(title, 1)
+        }
         startActivity(Intent(this, PlayerActivity::class.java).apply {
             putStringArrayListExtra(PlayerActivity.EXTRA_URLS, ArrayList(urls))
             putExtra(PlayerActivity.EXTRA_INDEX, index.coerceIn(0, urls.size - 1))
@@ -2708,6 +2726,13 @@ class MainActivity : Activity() {
             onOpenTitle = { doSearch(it) },
             onMore = { shelf -> openShelf(shelf) },
             onLibrary = { showLibrary() },
+            nav = listOf(
+                "搜索" to { showHome() },
+                "继续" to { showHistoryCards() },
+                "直播" to { showLive() },
+                "片源" to { showSources() },
+                "设置" to { showSetup() },
+            ),
         )
         setScreen(screen.build())
     }
@@ -2728,7 +2753,7 @@ class MainActivity : Activity() {
             // 先把首页已经算好的合并结果带进去：进「查看更多」是秒开，不额外打豆瓣
             val initial = Merger.merge(shelf.refs.map { it to repo.fetch(it) }, shelf.size)
             setScreen(
-                BrowseScreen(this@MainActivity, imageLoader, repo, library, shelf, initial) { doSearch(it) }.build(),
+                BrowseScreen(this@MainActivity, imageLoader, repo, library, shelf, initial, { showShelves() }) { doSearch(it) }.build(),
             )
         }
     }

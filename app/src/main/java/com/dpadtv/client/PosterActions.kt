@@ -46,6 +46,7 @@ object PosterActions {
                     if (result == null) "已从片单移除" else "已加入「${result.label}」",
                     Toast.LENGTH_SHORT,
                 ).show()
+                if (result != null) store.event(item.title, 0)
                 onChange()
             }
             .setNegativeButton("取消", null)

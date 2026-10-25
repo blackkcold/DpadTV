@@ -35,6 +35,8 @@ object Merger {
     fun cleanTitle(raw: String): String {
         var s = raw.replace('\u3000', ' ').trim()
         s = s.substringBefore(" / ").trim()
+        // 「大侦探 第九季」这种名字直接搜会打空，剥掉季数再交给聚合搜索
+        s = SEASON_SUFFIX.replace(s, "").trim()
         // 找到"中文之后第一次出现拉丁字母"的位置，从这里截断
         var cjkSeen = false
         for (i in s.indices) {
@@ -47,6 +49,11 @@ object Merger {
         }
         return s
     }
+
+    private val ANIMATION_HINTS = listOf("动画", "番剧", "剧场版", "OVA", "动漫", "奥特曼", "假面骑士")
+
+    /** 豆瓣的「日剧/韩剧」标签会混进番剧与剧场版；剧集货架里把它们挑出来 */
+    fun isAnimation(title: String): Boolean = ANIMATION_HINTS.any { title.contains(it) }
 
     private fun freshness(year: String, newest: Int): Double = when {
         year.isEmpty() -> 0.45
