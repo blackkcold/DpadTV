@@ -1,0 +1,131 @@
+<!doctype html><html lang="zh-CN"><meta charset="utf-8">
+<style>
+  *{box-sizing:border-box}
+  body{color:var(--foreground);font-family:inherit;font-size:14px;line-height:1.55;margin:0;padding:2px 0 8px}
+  h1{font-size:20px;margin:0 0 2px;letter-spacing:.01em}
+  .sub{color:var(--muted-foreground);font-size:12.5px;margin:0 0 14px}
+  .kpi{display:flex;gap:10px;margin:0 0 18px;flex-wrap:wrap}
+  .kbox{border:1px solid var(--border);border-radius:10px;padding:8px 14px;min-width:104px}
+  .kbox b{display:block;font-size:22px;line-height:1.1}
+  .kbox span{color:var(--muted-foreground);font-size:11.5px;letter-spacing:.06em;text-transform:uppercase}
+  .kbox.r b{color:#e5484d} .kbox.y b{color:#d98b1a} .kbox.g b{color:#2f9e6b}
+  h2{font-size:15px;margin:22px 0 10px;padding-bottom:6px;border-bottom:1px solid var(--border);letter-spacing:.02em}
+  .card{border:1px solid var(--border);border-radius:12px;padding:12px 14px;margin:0 0 10px}
+  .card.p0{border-left:3px solid #e5484d}
+  .ch{display:flex;align-items:baseline;gap:8px;margin-bottom:4px}
+  .ch h3{font-size:14.5px;margin:0;font-weight:650}
+  .sev{font-size:10.5px;font-weight:700;letter-spacing:.08em;padding:2px 6px;border-radius:4px;background:#e5484d;color:#fff}
+  .loc{color:var(--muted-foreground);font-size:11.5px;font-family:ui-monospace,SFMono-Regular,Menlo,monospace;margin:2px 0 6px}
+  pre{background:color-mix(in srgb, var(--foreground) 5%, transparent);border:1px solid var(--border);border-radius:8px;padding:8px 10px;overflow-x:auto;font-size:11.5px;line-height:1.5;margin:0 0 8px;font-family:ui-monospace,SFMono-Regular,Menlo,monospace}
+  .card p{margin:4px 0;font-size:13px} .card p b{color:var(--muted-foreground);font-weight:600;margin-right:6px}
+  table{width:100%;border-collapse:collapse;font-size:12.5px}
+  th{text-align:left;font-weight:600;color:var(--muted-foreground);font-size:11px;letter-spacing:.06em;text-transform:uppercase;padding:6px 8px;border-bottom:1px solid var(--border)}
+  td{padding:8px;border-bottom:1px solid var(--border);vertical-align:top}
+  td.n{color:var(--muted-foreground);width:26px;font-family:ui-monospace,monospace}
+  td.t{font-weight:550;min-width:170px}
+  tr:last-child td{border-bottom:none}
+  .batch td:last-child{color:var(--muted-foreground)}
+  .foot{color:var(--muted-foreground);font-size:11.5px;margin-top:14px}
+  code{font-family:ui-monospace,Menlo,monospace;font-size:11.5px;background:color-mix(in srgb,var(--foreground) 7%,transparent);padding:1px 4px;border-radius:4px}
+</style>
+<h1>缺陷审计 · DpadTV Pro 20261025d</h1>
+<p class="sub">只读审计，未改代码 · 电视已装 1.2.0 / 20261025d（22:14:31）· 未启动、未做实机测试</p>
+
+<div class="kpi">
+  <div class="kbox r"><b>4</b><span>P0 · 毁主功能</span></div>
+  <div class="kbox y"><b>17</b><span>P1 · 明显影响</span></div>
+  <div class="kbox g"><b>9</b><span>P2 · 观感边角</span></div>
+  <div class="kbox"><b>0</b><span>必崩点</span></div>
+</div>
+
+<h2>P0 —— 四个，按修复优先级</h2>
+<div class="card p0">
+      <div class="ch"><span class="sev">P0</span><h3>内置索引的 year 字段 100% 为空，年份维度整体失效</h3></div>
+      <div class="loc">tools/build_index.py:126-127 · LocalIndex.kt:138</div>
+      <pre># 只认标题里的括号年份
+m = re.search(r&quot;[(（](\d{4})[)）]&quot;, title)   # j/new_search_subjects 的 title 不带年份
+# 实测：1452 条里 year 非空 0 条，标题含 2025 的 0 条</pre>
+      <p><b>影响</b> 年份 chip 永远 0 命中；movie_2025 / tv_* 等 4 个货架每次启动都回落联网（2.5s 节流起，还可能吃 60 分钟风控）——「本地优先 0 请求」的前提被打掉一半。</p>
+      <p><b>修法</b> 用已抓到的 2025/2024/2023 标签反推年份（实测可覆盖 300/1452 = 20.7%），剩余需抓详情或豆列；在覆盖到 100% 之前，年份 chip 旁标注「联网查」。</p>
+    </div><div class="card p0">
+      <div class="ch"><span class="sev">P0</span><h3>浅色主题下所有列表/网格的焦点是常量白环，实测 1.11:1 —— 等于没有焦点</h3></div>
+      <div class="loc">MainActivity.kt:708-718（listSelector）</div>
+      <pre>val ring = InsetDrawable(GradientDrawable().apply {
+    setColor(Color.TRANSPARENT); setStroke(dp(5), BRIGHT)   // BRIGHT = Theme.ON_IMAGE_INK = #FFFFFF
+}, dp(3))</pre>
+      <p><b>影响</b> 选集网格、继续观看、搜索结果这三处子项本身不可聚焦，靠 GridView 持焦 + 这个 selector 显示焦点；浅色底 #F2F3F5 上 1.11:1，遥控器看不出选到第几集。</p>
+      <p><b>修法</b> selector 换成 Theme.focusRing 的双环（accent 2dp + halo 2dp），并在 newList/newGrid 建时按当前主题取色。</p>
+    </div><div class="card p0">
+      <div class="ch"><span class="sev">P0</span><h3>详情页提示「长按片名可加入片单」，但片名永远拿不到焦点</h3></div>
+      <div class="loc">MainActivity.kt:2673（提示）· 2698（attach）· titleText :578</div>
+      <pre>text = &quot;长按片名可加入片单&quot;
+val titleView = titleText(detail.info.title…, Theme.HERO)
+PosterActions.attach(this, titleView, libItem, library)   // titleText 未设 isFocusable</pre>
+      <p><b>影响</b> 电视上长按只发给持焦控件；片名不可聚焦 → 手势 100% 无效，用户照着屏幕提示按完全没反应。</p>
+      <p><b>修法</b> 给 titleView 补 isFocusable=true / isFocusableInTouchMode=false + 焦点样式；或改成显式「＋ 加入片单」按钮；或删掉这行提示。</p>
+    </div><div class="card p0">
+      <div class="ch"><span class="sev">P0</span><h3>只要开始播放就无条件把条目写成「在看」，覆盖用户手动标的「看过/弃剧」</h3></div>
+      <div class="loc">MainActivity.kt:2845-2849（playFromList）</div>
+      <pre>runCatching {
+    library.put(MovieItem(title = title, cover = cover), LibState.WATCHING)
+    library.event(title, 1)
+}</pre>
+      <p><b>影响</b> 片单状态机被自动写入污染：用户标了「看过」，回看一次就变回「在看」；直播频道、历史单集也会被塞进片单（标题含「· 第 N/M 集」时主键还会分叉）。</p>
+      <p><b>修法</b> 仅当 stateOf(title) 为空时才写 WATCHING；已有显式状态只记 event 不动 state；play() 给直播/历史单独传一个「不写片单」的开关。</p>
+    </div>
+
+<h2>P1 —— 十七个，按「检索 / 状态 / 导航 / 布局」排</h2>
+<table><tr><th>#</th><th>问题</th><th>为什么</th><th>怎么修</th></tr>
+<tr><td class=n>1</td><td class=t>联网兜底后永远只有第一页<div class=loc>CollectionRepo.kt:104-106</div></td><td>`if (local.size &gt;= 6 || (q.start &gt; 0 &amp;&amp; local.isEmpty() &amp;&amp; index.available))` → 联网给了 20 条后，loadMore 的 start=20 本地必空、直接返回空并 `done=true`。</td><td>本地空且已判定要联网时，照旧打网络 start=q.start；本地只有「整页填满」才算命中。</td></tr>
+<tr><td class=n>2</td><td class=t>切换筛选无请求令牌<div class=loc>BrowseScreen.kt:330 / 303 / 362</div></td><td>三处都是 `scope.launch { … items.clear(); addAll(page) }`，先发的慢响应回来会覆盖后发的结果并改写 status。</td><td>加自增 reqId 或持有 Job cancel 前一个，回来先比 token；launch 外层 try/finally 复位 loading 与进度条。</td></tr>
+<tr><td class=n>3</td><td class=t>「按 OK 重试」不可聚焦<div class=loc>BrowseScreen.kt:88 / 346</div></td><td>status 是 TextView，无 isFocusable；`status.setOnClickListener { reload() }` 在电视上永远按不到。</td><td>失败态换成可聚焦按钮（或给 status 设 focusable + 焦点环）。</td></tr>
+<tr><td class=n>4</td><td class=t>筛选器焦点归还靠 tag，&quot;全部&quot; 三行重名 → 焦点跳回年份行<div class=loc>BrowseScreen.kt:257 / 231</div></td><td>`tag = v`，`findViewWithTag&lt;View&gt;(v)?.requestFocus()`；年份/地区/类型都有「全部」。</td><td>tag 带维度前缀 `&quot;$name:$v&quot;`，或记录（行,列）索引后按索引 requestFocus。</td></tr>
+<tr><td class=n>5</td><td class=t>loadRef 仍是「清空 + 加载中」白屏，且文案还在说侧车<div class=loc>BrowseScreen.kt:297-315</div></td><td>`items.clear(); adapter.notifyDataSetChanged(); status.text = &quot;加载中&quot;`；OF astate 文案「缓存还没准备好，等侧车预热」——sidecar 已删。</td><td>与 reload() 统一：不清空、走 3dp 进度条、失败可重试；把侧车文案换成索引口径。</td></tr>
+<tr><td class=n>6</td><td class=t>ttlMs 形参没接线，所有「重试/强刷」都是假的<div class=loc>CollectionRepo.kt:67 / 102 / 142</div></td><td>`fetch(ref, ttlMs)`、`fetchQuery(q, ttlMs)` 都收了参数，但 `cached(key, block)` 没有 ttlMs，恒用 7 天 TTL。</td><td>ttlMs 透传到 cached/readCache；ttlMs==0 跳过读缓存，成功后覆盖。</td></tr>
+<tr><td class=n>7</td><td class=t>「快进/快退步长」设置不生效<div class=loc>PlayerActivity.kt:742-749</div></td><td>播放器硬编码 `seekBy(if (event.repeatCount &gt; 0) 15_000L else 10_000L)`；Prefs.seekStepSeconds 只在设置页被读写。</td><td>seekBy(prefs.seekStepSeconds * 1000L)，长按 ×1.5。</td></tr>
+<tr><td class=n>8</td><td class=t>本地索引把四种 ref 抹平成同一批，首页电影行 = 评分榜<div class=loc>CollectionRepo.kt:70-71（fetch 本地分支）</div></td><td>本地命中不看 ref.kind/sort：HOT / TOP250 / 9分+ / 新片都变成「电影按评分前 60」，去重后整行归最高权重榜，dominant 角标一抑制就一个角标都不剩。</td><td>本地按 ref.kind/sort 分派（HOT 用扰动、LATEST 用年份、DOULIST 走白名单）；补位循环同样校验 40% 配额。</td></tr>
+<tr><td class=n>9</td><td class=t>CollectionRepo 每进一屏新建一次<div class=loc>MainActivity.kt:3187 / 3215</div></td><td>`CollectionRepo(this)` 在 ShelvesScreen 与 openShelf 各建一个 → 45KB gzip 索引重复解析、Mutex 节流与 60 分钟 blockedUntil 只活在一个实例里，返回再进立刻又能打一轮豆瓣。</td><td>提到 Application 级单例（含 LocalIndex）。</td></tr>
+<tr><td class=n>10</td><td class=t>返回栈丢来源：从筛选页/片单进详情，返回一律回首页<div class=loc>MainActivity.kt:481-491 / 2668</div></td><td>`&quot;browse&quot;, &quot;library&quot; -&gt; showShelves()`；`showRecommend()` 首行又 `if (prefs.shelvesEnabled()){ showShelves(); return }`。</td><td>detail 记住 origin（results/browse/library/history）并回原样重建，筛选与滚动位置一起恢复。</td></tr>
+<tr><td class=n>11</td><td class=t>「查看更多」带入的 initial 与页面 base 不是同一个查询<div class=loc>BrowseScreen.kt:147-153 / MainActivity.kt:3218</div></td><td>4 个榜合并（含 7.x 分）塞进 base=电影+9分+ 的页面，页头却写 9 分+；续页从 start=18 接，9 分+ 真正前 18 条永不出现。</td><td>initial 的 Query 与 defaultQuery 不一致就置空走 reload；或记录 Query 后按 (query, offset) 对齐。</td></tr>
+<tr><td class=n>12</td><td class=t>海报标题 maxLines=1 却没有 ellipsize，长片名被硬切<div class=loc>ShelvesScreen.kt:509 / BrowseScreen.kt:423 / LibraryScreen.kt:169</div></td><td>146dp / 13sp 只放得下 9~10 个汉字，标题里还拼了「★评分」，日韩片名几乎必被裁且没有省略号。</td><td>三处统一 `ellipsize = TextUtils.TruncateAt.END`，评分拆成独立一行。</td></tr>
+<tr><td class=n>13</td><td class=t>详情页头部无高度上限，会把选集网格挤没<div class=loc>MainActivity.kt:2691 / 2719 / 2822</div></td><td>40sp 片名无 maxLines、简介 5 行，而只有 epGrid 吃 weight=1（col 不滚动）→ 540dp 屏上选集区可能只剩 &lt;40dp。</td><td>片名 maxLines=2 + ellipsize，简介 3 行；或头部进 ScrollView 并给 epGrid 设 minHeight。</td></tr>
+<tr><td class=n>14</td><td class=t>hero 的 40sp 白标题压在自己渐变的透明段上（亮图 1.28:1）<div class=loc>ShelvesScreen.kt:293 / 286</div></td><td>幕布 `scrimBottom(0xE6000000)` 顶部全透明、顶部那层只盖 150dp，216dp hero 的标题正好落在透明区。</td><td>文字块用自定义渐变（顶部就 0x66000000 起），或把顶部幕布抬到 hero 一半以上。</td></tr>
+<tr><td class=n>15</td><td class=t>「继续观看 / 直播」进播放器：无上下集、无自动连播，错误文案却让用户「按返回键换源」<div class=loc>MainActivity.kt:3034 / 3138 · PlayerActivity.kt:377</div></td><td>`play(h.playUrl, h.title)` = 单 URL 列表；错误面板 `&quot;…按返回键换源&quot;`，但这条路径没有 alternatives，BACK 只是 finish。</td><td>历史存整季 URL 列表；错误面板直接给「换源」按钮，没有备选就改成「返回后重新搜索」。</td></tr>
+<tr><td class=n>16</td><td class=t>片单 source 被 CONFLICT_REPLACE 覆盖成空，推荐画像被抹掉<div class=loc>Library.kt:93-104 · LibraryScreen.kt:188</div></td><td>`put(&quot;source&quot;, item.from)` + REPLACE；片单页 `e.toItem()` 未带 from → from 恒为 &quot;&quot;，改一次状态就把来源清空。</td><td>put 时 item.from 为空则沿用库里旧值；或把 from 补进 LibEntry.toItem()。</td></tr>
+<tr><td class=n>17</td><td class=t>GridView 子项可聚焦，与 newGrid() 的「让列表自己持焦」约定相反<div class=loc>BrowseScreen.kt:416 · LibraryScreen.kt:162</div></td><td>格子里 `isFocusable = true`，AbsListView 默认 FOCUS_AFTER_DESCENDANTS → 由子项吃方向键；与 showDetail 的 epGrid 焦点模型完全相反。</td><td>与 newGrid 对齐：子项不聚焦、由列表持焦 + 主题化 selector（待真机确认滚动是否真的翻不出第一屏）。</td></tr>
+</table>
+
+<h2>P2 —— 九个</h2>
+<table><tr><th>#</th><th>问题</th><th>说明</th></tr>
+<tr><td class=n>1</td><td class=t>11/12sp 字号残留 24 处，低于 13sp 下限<div class=loc>MainActivity.kt:2391 / 2385 / 3120</div></td><td>结果卡片来源行、继续观看进度都是 11~12sp；button 16sp 与 pill 15sp 同屏并列差半级。</td></tr>
+<tr><td class=n>2</td><td class=t>播放器进度条仍是文档里否决的 #38BDF8<div class=loc>res/drawable/player_progress.xml:21</div></td><td>与全站 accent #A7C5FF 不同色，改 accent 这处不会跟随。</td></tr>
+<tr><td class=n>3</td><td class=t>缓存上限弹窗默认项错位、清理弹窗写死 2 GB<div class=loc>MainActivity.kt:1425 / 1310</div></td><td>`indexOf(...).coerceAtLeast(2)` 让 512MB/1GB 也高亮 2GB；清理弹窗文案「上限 2 GB」恒不变。</td></tr>
+<tr><td class=n>4</td><td class=t>首页「我的片单」行改完状态不刷新<div class=loc>ShelvesScreen.kt:145-151</div></td><td>`ensureLibraryRow()` 已存在就直接 return：计数、内容、删空后的整行都不会变。</td></tr>
+<tr><td class=n>5</td><td class=t>ImageLoader 键含尺寸、无 in-flight 合并、按条数计量<div class=loc>ImageLoader.kt:20 / 29</div></td><td>同一封面首页下两次（160×220 + 960×540 各存一份）；160 条按条数，hero 单张 ~8MB，聚焦十几个标题有 OOM 面。</td></tr>
+<tr><td class=n>6</td><td class=t>失败分类不可信：403 不退避、OFFLINE 永不出现、倒计时没有 UI<div class=loc>CollectionRepo.kt:129-134 / 173-180</div></td><td>只看 body 关键词不看 resp.code；固定退避 1 小时（注释写按 Retry-After）；`blockedSecondsLeft()` 无人调用；lastFailure/lastSource 是共享可变字段，并发会串味。</td></tr>
+<tr><td class=n>7</td><td class=t>时间模式翻转会把未登记的页面踢回首页<div class=loc>MainActivity.kt:165</div></td><td>rerenderForTheme 的 when 没覆盖 files/import/addsource/qradd/home/recommend → 19:00 正在扫码添加也会被换屏（QrAddServer 还留着）。</td></tr>
+<tr><td class=n>8</td><td class=t>isFocusableInTouchMode=true 仍在 3 处<div class=loc>MainActivity.kt:725/772 · PlayerActivity.kt:549</div></td><td>只影响触屏，遥控器正常；但会让 input tap 只聚焦不点击，自动化验 UI 时必踩。</td></tr>
+<tr><td class=n>9</td><td class=t>空 tags 会返回 1452 条全库并被当成本地命中<div class=loc>LocalIndex.kt:124-126</div></td><td>当前没有调用点会传空 tags（待确认），但这是颗定时炸弹。</td></tr>
+</table>
+
+<h2>修复批次</h2>
+<table class="batch"><tr><th>批次</th><th>内容</th><th>预估</th><th>做完能感觉到什么</th></tr>
+<tr><td class=t>B1 · P0</td><td>year 反推 · 焦点双环 · 长按片名可达 · WATCHING 条件写入</td><td>4h</td><td>年份筛选真有结果；浅色下知道选到第几集；片单不再自动改脏</td></tr>
+<tr><td class=t>B2 · 检索</td><td>请求令牌 · fetchedOffset · ttlMs 接线 · loadRef 白屏 · 重试可聚焦 · 「全部」tag 前缀</td><td>3h</td><td>快切筛选不串结果；翻得到第 2 页；重试真的重试</td></tr>
+<tr><td class=t>B3 · 导航播放</td><td>返回栈 · initial 口径 · 整季播放 · 换源按钮 · source 合并</td><td>4h</td><td>筛选页返回回筛选页；剧能自动连播；换源有入口</td></tr>
+<tr><td class=t>B4 · 观感</td><td>ellipsize · 详情头部上限 · hero 幕布 · 字号收敛 · 进度条令牌</td><td>2h</td><td>长片名有省略号；选集不被挤没；亮海报上片名读得出</td></tr>
+</table>
+
+<h2>核实状态</h2>
+<table><tr><th>条目</th><th>状态</th></tr>
+<tr><td class=t>P0-1 索引 year 全空</td><td><b>已实测</b> · 1452/1452 为空，标题含 2025 的 0 条</td></tr>
+<tr><td class=t>P0-2 浅色焦点白环</td><td><b>已核实</b> · <code>MainActivity.kt:712</code> 用 #FFFFFF 5dp，浅底 1.11:1</td></tr>
+<tr><td class=t>P0-3 长按片名不可达</td><td><b>已核实</b> · attach 挂在未设 focusable 的 TextView</td></tr>
+<tr><td class=t>P0-4 无条件写「在看」</td><td><b>已核实</b> · <code>MainActivity.kt:2846</code> 无 stateOf 判断</td></tr>
+<tr><td class=t>P1-1 分页短路 / P1-6 ttlMs / P1-7 seekStep</td><td><b>已核实</b> · 源码逐行</td></tr>
+<tr><td class=t>P1-16 GridView 子项聚焦</td><td>待真机确认 · 是否真翻不出第一屏</td></tr>
+<tr><td class=t>P2-9 空 tags 返回全库</td><td>待确认 · 当前无调用点</td></tr>
+</table>
+
+<p class="foot">完整证据与逐条位置：<code>docs/AUDIT-20261025-BUGS.md</code> · 审计方式：静态阅读 + 索引数据 python 复算 + 对比度 WCAG 现算 + 三通道交叉比对</p>
+</html>
