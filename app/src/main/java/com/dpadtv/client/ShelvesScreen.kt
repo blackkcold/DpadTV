@@ -30,7 +30,7 @@ class ShelvesScreen(
     private val loader: ImageLoader,
     private val repo: CollectionRepo,
     private val store: LibraryStore,
-    private val onOpenTitle: (String) -> Unit,
+    private val onOpenTitle: (MovieItem) -> Unit,
     private val onMore: (Shelf) -> Unit,
     private val onLibrary: () -> Unit,
     private val nav: List<Pair<String, () -> Unit>> = emptyList(),
@@ -139,15 +139,30 @@ class ShelvesScreen(
     }
 
     /**
-     * 第一次收藏后在首页立刻长出「我的片单」行。
-     * 只做「插入」不做「重建」：重建会把焦点扔掉，电视上焦点乱跳比多等一次更难受。
+     * 「我的片单」行跟着片单变。
+     *
+     * 旧版只在「第一次收藏」时插入，之后 `libraryView != null` 就直接 return：
+     * 计数、内容、甚至删空后的整行都不会更新（审计 P2-4）。
      */
     private fun ensureLibraryRow() {
         val p = page ?: return
-        if (libraryView != null || store.list(null, 1).isEmpty()) return
+        val existing = libraryView
+        if (store.list(null, 1).isEmpty()) {
+            if (existing != null) {
+                p.removeView(existing)
+                libraryView = null
+            }
+            return
+        }
         val row = libraryRow()
+        if (existing == null) {
+            p.addView(row, minOf(p.childCount, 1))
+        } else {
+            val idx = p.indexOfChild(existing)
+            p.removeView(existing)
+            p.addView(row, if (idx >= 0) idx else 1)
+        }
         libraryView = row
-        p.addView(row, 1)
     }
 
     /** 首页第一行永远是自己攒的片单 —— 比任何公共榜都更该占这个位置 */
@@ -227,7 +242,7 @@ class ShelvesScreen(
             setPadding(dp(8), dp(4), dp(8), dp(4))
         })
         row.addView(TextView(host).apply {
-            text = "DpadTV Pro"
+            text = BuildConfig.APP_NAME
             setTextSize(Theme.BRAND)
             setTextColor(ink)
             setPadding(dp(10), 0, dp(14), 0)
@@ -288,9 +303,9 @@ class ShelvesScreen(
         val textBox = LinearLayout(host).apply {
             orientation = LinearLayout.VERTICAL
             setPadding(dp(48), dp(8), dp(48), dp(44))
-            // 暗幕贴在文字块上：白字必须有底，浅色主题也一样；
-            // 最后 56dp 由下面的页面色渐变吃掉接缝
-            background = Theme.scrimBottom(0xE6000000.toInt())
+            // 暗幕贴在文字块上：白字必须有底，浅色主题也一样；顶部就要压住 40sp 白字，
+            // 否则亮海报上标题只有 1.28:1（审计 P1-14）
+            background = Theme.scrimText()
         }
         heroTitle = TextView(host).apply {
             setTextSize(Theme.HERO)
@@ -507,6 +522,7 @@ class ShelvesScreen(
             setTextSize(Theme.CAPTION)
             setTextColor(ink)
             maxLines = 1
+            ellipsize = android.text.TextUtils.TruncateAt.END
             setPadding(dp(2), dp(5), 0, 0)
             layoutParams = LinearLayout.LayoutParams(dp(146), ViewGroup.LayoutParams.WRAP_CONTENT)
         }
@@ -518,7 +534,7 @@ class ShelvesScreen(
             cell.animate().scaleX(s).scaleY(s).setDuration(Theme.ANIM).start()
             if (focused) setHero(item)
         }
-        cell.setOnClickListener { onOpenTitle(item.title) }
+        cell.setOnClickListener { onOpenTitle(item) }
         PosterActions.attach(host, cell, item, store) { ensureLibraryRow() }
 
         if (item.cover.isNotEmpty()) {
@@ -554,7 +570,7 @@ class ShelvesScreen(
             repeat(7) { strip.addView(skeletonCell()) }
             countLabel.text = "  · 重新加载中"
             scope.launch {
-                val groups = shelf.refs.map { ref -> ref to repo.fetch(ref, ttlMs = 0) }
+                val groups = shelf.refs.map { ref -> ref to repo.fetch(ref, ttlMs = 0, allowNetwork = true) }
                 val merged = Merger.merge(groups, shelf.size)
                 strip.removeAllViews()
                 if (merged.isEmpty()) { strip.addView(retryCell(shelf, strip, countLabel)); return@launch }

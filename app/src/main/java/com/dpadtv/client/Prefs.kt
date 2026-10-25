@@ -12,6 +12,10 @@ data class HistoryEntry(
     val durationMs: Long,
     val updatedAt: Long,
     val cover: String = "",
+    /** 整季地址列表：有它才能自动连播/上下集（审计 P1-15） */
+    val urls: List<String> = emptyList(),
+    /** 上次看到第几集 */
+    val index: Int = 0,
 )
 
 /** 本地配置：服务器、会话 Cookie、片源列表。全部存在应用私有 SharedPreferences。 */
@@ -161,6 +165,11 @@ class Prefs(ctx: Context) {
                         durationMs = o.optLong("durationMs", 0),
                         updatedAt = o.optLong("updatedAt", 0),
                         cover = o.optString("cover", ""),
+                        urls = runCatching {
+                            val a = o.optJSONArray("urls") ?: JSONArray()
+                            (0 until a.length()).map { i -> a.optString(i) }
+                        }.getOrDefault(emptyList()),
+                        index = o.optInt("index", 0),
                     ),
                 )
             }
@@ -190,7 +199,9 @@ class Prefs(ctx: Context) {
                     .put("positionMs", e.positionMs)
                     .put("durationMs", e.durationMs)
                     .put("updatedAt", e.updatedAt)
-                    .put("cover", e.cover),
+                    .put("cover", e.cover)
+                    .put("index", e.index)
+                    .put("urls", JSONArray(e.urls)),
             )
         }
         sp.edit().putString("history", arr.toString()).apply()
@@ -205,7 +216,9 @@ class Prefs(ctx: Context) {
                     .put("positionMs", e.positionMs)
                     .put("durationMs", e.durationMs)
                     .put("updatedAt", e.updatedAt)
-                    .put("cover", e.cover),
+                    .put("cover", e.cover)
+                    .put("index", e.index)
+                    .put("urls", JSONArray(e.urls)),
             )
         }
         sp.edit().putString("history", arr.toString()).apply()
@@ -338,7 +351,9 @@ class Prefs(ctx: Context) {
                     .put("positionMs", e.positionMs)
                     .put("durationMs", e.durationMs)
                     .put("updatedAt", e.updatedAt)
-                    .put("cover", e.cover),
+                    .put("cover", e.cover)
+                    .put("index", e.index)
+                    .put("urls", JSONArray(e.urls)),
             )
         }
         sp.edit().putString("history", arr.toString()).apply()

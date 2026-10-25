@@ -14,28 +14,28 @@ import java.net.HttpURLConnection
 import java.net.URL
 import java.net.URLEncoder
 import java.security.MessageDigest
+import kotlin.random.Random
 
 /** 一次取数为什么空手：UI 只在这个原因上写文案，不再拿「N 分钟后恢复」骗人 */
 enum class FetchFailure { NONE, RATE_LIMITED, OFFLINE, UPSTREAM }
 
 /**
- * 榜单取数：**本地索引优先，联网只做兜底**。
+ * 榜单取数：**本地索引优先，联网只跟着用户动作走**。
  *
- * 数据链路（改过一次，原因见 docs/AUDIT-BROWSE-SIDECAR.md）：
- *   App → assets/douban-index.json.gz（本地求交，0 请求）      ← 正常路径
- *   App → 豆瓣直连（只在索引缺该标签 / 用户点「按 OK 重试」）   ← 兜底，2.5s 节流 + 长退避
+ *   App → assets/douban-index.json.gz（本地求交，0 请求）     ← 首页 / 切标签 / 翻页
+ *   App → 豆瓣直连（点「查看更多」/「重试」/滚动到底才发生）  ← 按需，受门控
  *
- * 为什么砍掉 sidecar：榜单是周级变化的公共元数据，把它做成"实时搜索"才是慢和限流的根源。
- * 预生成索引随 APK 发布后，运行期不需要任何常驻服务；抓取改在 `tools/build_index.py` 里做。
- *
- * 三条纪律：
- *   1. 本地索引命中的结果不做二次请求（`lastSource = "index"`，UI 上标数据日期）
- *   2. 只有真限流才设退避（按 Retry-After），断网/空结果不设
- *   3. 每页结果单独缓存 7 天，滚动分页不重复打接口
+ * 为什么改成「按需」：首页一进来是 3 行 × 4 个榜 = 最多 11 次请求，
+ * 等于「打开电视」就先向豆瓣要 11 次数据，最容易吃风控。
+ * 现在的纪律：
+ *   1. **启动 0 请求**：所有行先吃本地索引，本地没有就显示「点这里联网取」；
+ *   2. **滚动才分页**：loadMore 只在滑到底时取下一页，不预取；
+ *   3. **门控**：最小间隔 3s（+抖动）、10 分钟 20 次预算、403 指数退避（10m→20m→40m→80m，上限 2h）；
+ *   4. **失败原因跟着这一次调用走**，不被并发请求串味（审计 R8）。
  */
 class CollectionRepo(private val ctx: Context) {
 
-    /** 本地榜单索引：优先命中它，命中就完全不发请求（含首页与筛选页） */
+    /** 本地榜单索引：优先命中它，命中就完全不发请求 */
     private val index by lazy { LocalIndex(ctx) }
 
     /** 上一次结果来自哪里：UI 用来标"本地索引 · 2026-10-25"还是"已联网刷新" */
@@ -43,104 +43,204 @@ class CollectionRepo(private val ctx: Context) {
     var lastSource: String = ""
         private set
 
-
-    private val ua =
-        "Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/122.0.0.0 Safari/537.36"
-
-    private val gate = Mutex()
-    private var lastRequestAt = 0L
-    private var blockedUntil = 0L
-
     /** 最近一次取数结果。UI 只在「列表为空」时读它决定文案。 */
     @Volatile
     var lastFailure: FetchFailure = FetchFailure.NONE
         private set
 
-    /** 本地索引的生成日期（没有索引就是空串） */
+    private val ua =
+        "Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/122.0.0.0 Safari/537.36"
+
+    /** 节奏/配额/退避：规则全在 RequestGate 里，可单测（见 RequestGateTest） */
+    private val throttle = RequestGate()
+    private val mutex = Mutex()
+
+    /** 一次取数的结果：失败原因跟着这一次走，别被并发请求覆盖 */
+    private class Outcome {
+        var failure: FetchFailure = FetchFailure.NONE
+        var source: String = ""
+    }
+
     fun indexBuiltAt(): String = runCatching { index.builtAt }.getOrDefault("")
 
-    fun blockedSecondsLeft(): Long {
-        val left = blockedUntil - System.currentTimeMillis()
-        return if (left > 0) left / 1000 else 0
+    /** 启动时在后台把索引解析掉，避免第一次查询在主线程解 52KB gzip（审计 R10） */
+    fun warmUp() {
+        runCatching { index.itemCount }
     }
 
-    suspend fun fetch(ref: CollectionRef, ttlMs: Long = TTL): List<MovieItem> = withContext(Dispatchers.IO) {
-        // 本地索引命中就返回：切标签/回首页都是 0 请求
-        run {
-            val q = ref.toQuery()
-            val local = index.query(q.tags, q.year, q.minRate, 0, maxOf(ref.weight.let { 60 }, 40))
-            if (local.size >= 6) {
-                lastSource = "index"
-                lastFailure = FetchFailure.NONE
-                return@withContext local
-            }
+    fun blockedSecondsLeft(): Long = throttle.cooldownLeft(System.currentTimeMillis()) / 1000
+
+    /** 本地索引能不能回答这一年：UI 用它给年份 chip 标「联网」 */
+    fun localYearKnown(year: String): Boolean =
+        runCatching { index.yearsAvailable().contains(year) }.getOrDefault(false)
+
+    /**
+     * 取一个榜单（首页一行里的一个来源）。
+     *
+     * @param allowNetwork 只有用户明确要看（点「查看更多」/「重试」）才允许联网。
+     *                     首页自动渲染传 false → 冷启动 0 请求。
+     */
+    suspend fun fetch(
+        ref: CollectionRef,
+        ttlMs: Long = TTL,
+        allowNetwork: Boolean = false,
+    ): List<MovieItem> = withContext(Dispatchers.IO) {
+        val out = Outcome()
+        val local = localFor(ref)
+        if (local.size >= LOCAL_ENOUGH || !allowNetwork) {
+            publish(out, if (local.isNotEmpty()) "index" else "")
+            return@withContext local
         }
-        when (ref.kind) {
-        RefKind.SEARCH -> cached(ref.id) {
-            val q = Query(ref.tags, ref.year, if (ref.minRate > 0) ref.minRate else 0.0, Sort.RATING, 0)
-            request(DoubanUrls.search(q))?.let { parseNewSearch(it) } ?: emptyList()
+        val net = networkFor(ref, ttlMs, out)
+        if (net.isNotEmpty()) {
+            publish(out, "network")
+            return@withContext net
         }
-        RefKind.HOT -> cached("hot") {
-            request("https://movie.douban.com/j/search_subjects?type=movie&tag=" +
-                enc("热门") + "&sort=recommend&page_limit=40&page_start=0")
-                ?.let { parseHot(it) } ?: emptyList()
-        }
-        RefKind.TOP250 -> (0 until 2).flatMap { page ->
-            cached("top250_$page") {
-                request("https://movie.douban.com/top250?start=${page * 25}")
-                    ?.let { parseTop250(it) } ?: emptyList()
-            }
-        }
-        RefKind.DOULIST -> cached("doulist_${ref.doulistId}") {
-            request("https://www.douban.com/doulist/${ref.doulistId}/?sort=seq&playable=0")
-                ?.let { parseDoulist(it) } ?: emptyList()
-        }
-        }
+        // 联网失败：本地近似也比空屏强
+        publish(out, if (local.isNotEmpty()) "index" else "")
+        local
     }
 
-    /** 浏览页用：按 Query + 页码取一页（20 条） */
-    suspend fun fetchQuery(q: Query, ttlMs: Long = TTL): List<MovieItem> = withContext(Dispatchers.IO) {
-        // 本地优先：有 >= 6 条就先给结果，联网只在"本地不够/用户主动刷新"时发生
-        val local = index.query(q.tags, q.year, q.minRate, q.start, 24)
-        if (local.size >= 6 || (q.start > 0 && local.isEmpty() && index.available)) {
-            lastSource = "index"
-            lastFailure = FetchFailure.NONE
+    /**
+     * 浏览页用：按 Query + 页码取一页（24 条）。
+     *
+     * 本地能凑够半页就先用本地；不够才联网 —— 但 start>0 时**不再短路**，
+     * 否则联网兜底之后永远只有第一页（审计 P1-1）。
+     */
+    suspend fun fetchQuery(
+        q: Query,
+        ttlMs: Long = TTL,
+        allowNetwork: Boolean = true,
+    ): List<MovieItem> = withContext(Dispatchers.IO) {
+        val out = Outcome()
+        val local = index.query(q.tags, q.year, q.minRate, q.start, PAGE)
+        if (local.size >= LOCAL_ENOUGH || !allowNetwork) {
+            publish(out, if (local.isNotEmpty()) "index" else "")
             return@withContext local
         }
         val url = DoubanUrls.search(q)
-        cached("q_" + md5(url)) { request(url)?.let { parseNewSearch(it) } ?: emptyList() }
+        val net = cached("q_" + md5(url), ttlMs, out) { request(url, out)?.let { parseNewSearch(it) } ?: emptyList() }
+        publish(out, if (net.isNotEmpty()) "network" else if (local.isNotEmpty()) "index" else "")
+        if (net.isNotEmpty()) net else local
     }
 
-    // ---------- 取数：侧车优先，直连兜底 ----------
+    // ---------- 本地索引分派 ----------
 
-    private suspend fun request(url: String): String? = gate.withLock {
-        // 2) 直连兜底：只在侧车不可达 / 没有侧车时走；失败即长退避，不反复撞风控
-        if (System.currentTimeMillis() < blockedUntil) return@withLock null
-        val gap = 2500 - (System.currentTimeMillis() - lastRequestAt)
-        if (gap > 0) delay(gap)
-        lastRequestAt = System.currentTimeMillis()
-        val resp = runCatching { getRaw(url) }
-            .onFailure { Log.w("DpadTVDouban", "GET 失败 ${url.take(90)} → ${it.javaClass.simpleName}: ${it.message}") }
-            .getOrNull()
-        if (resp == null) {
-            lastFailure = FetchFailure.UPSTREAM
-            return@withLock null
+    /** 索引没有「热门」维度：用 id 的稳定哈希打散评分序，避免和「9 分+」整行重复 */
+    private fun shuffled(items: List<MovieItem>): List<MovieItem> =
+        items.sortedBy { it.doubanId.hashCode() }
+
+    private fun localFor(ref: CollectionRef): List<MovieItem> = when (ref.kind) {
+        RefKind.SEARCH -> index.query(ref.tags, ref.year, ref.minRate, 0, 60)
+        RefKind.HOT -> shuffled(index.query(listOf("电影"), null, 0.0, 0, 60))
+        // TOP250 / 豆列是策展顺序：构建索引时按抓取顺序存成独立标签（build_index --lists）
+        RefKind.TOP250 -> if (index.hasTag(TOP250_TAG)) index.queryOrdered(TOP250_TAG, 0, 50) else emptyList()
+        RefKind.DOULIST -> if (ref.doulistId == OSCAR_DOULIST && index.hasTag(OSCAR_TAG)) {
+            index.queryOrdered(OSCAR_TAG, 0, 40)
+        } else {
+            emptyList()
         }
-        if (resp.body.contains("检测到有异常请求") || resp.body.contains("\"r\":1")) {
-            // 直连被风控：一小时别再试，等下次侧车恢复
-            blockedUntil = System.currentTimeMillis() + 60 * 60_000
-            lastFailure = FetchFailure.RATE_LIMITED
-            Log.w("DpadTVDouban", "直连触发风控，退避 60 分钟：${resp.body.take(80)}")
-            return@withLock null
-        }
-        lastFailure = FetchFailure.NONE
-        lastSource = "network"
-        Log.i("DpadTVDouban", "direct OK ${resp.body.length}B ${url.substringAfter("?").take(70)}")
-        resp.body
     }
 
-    private suspend fun cached(key: String, block: suspend () -> List<MovieItem>): List<MovieItem> {
-        readCache(key)?.let { return it }
+    private suspend fun networkFor(ref: CollectionRef, ttlMs: Long, out: Outcome): List<MovieItem> = when (ref.kind) {
+        RefKind.SEARCH -> cached("q_" + md5(DoubanUrls.search(ref.toQuery())), ttlMs, out) {
+            request(DoubanUrls.search(ref.toQuery()), out)?.let { parseNewSearch(it) } ?: emptyList()
+        }
+        RefKind.HOT -> cached("hot", ttlMs, out) {
+            request("https://movie.douban.com/j/search_subjects?type=movie&tag=" +
+                enc("热门") + "&sort=recommend&page_limit=40&page_start=0", out)
+                ?.let { parseHot(it) } ?: emptyList()
+        }
+        RefKind.TOP250 -> (0 until 2).flatMap { page ->
+            cached("top250_$page", ttlMs, out) {
+                request("https://movie.douban.com/top250?start=${page * 25}", out)
+                    ?.let { parseTop250(it) } ?: emptyList()
+            }
+        }
+        RefKind.DOULIST -> cached("doulist_${ref.doulistId}", ttlMs, out) {
+            request("https://www.douban.com/doulist/${ref.doulistId}/?sort=seq&playable=0", out)
+                ?.let { parseDoulist(it) } ?: emptyList()
+        }
+    }
+
+    private fun publish(out: Outcome, source: String) {
+        lastFailure = out.failure
+        lastSource = source.ifEmpty { out.source }
+    }
+
+    // ---------- 取数：直连（门控都在这里） ----------
+
+    private suspend fun request(url: String, out: Outcome): String? = mutex.withLock {
+        // 1) 领票：冷却中 / 配额用尽 → 本次不联网
+        var permit = throttle.acquire(System.currentTimeMillis())
+        if (permit.verdict != RequestGate.Verdict.ALLOW) {
+            out.failure = FetchFailure.RATE_LIMITED
+            Log.w("DpadTVDouban", "门控拦截：${permit.verdict}，剩余冷却 ${permit.cooldownMs / 1000}s")
+            return@withLock null
+        }
+        if (permit.waitMs > 0) delay(permit.waitMs)
+        // 2) 等完之后再确认一次（等待期间可能被别的请求推进了窗口/冷却）
+        permit = throttle.acquire(System.currentTimeMillis())
+        if (permit.verdict != RequestGate.Verdict.ALLOW) {
+            out.failure = FetchFailure.RATE_LIMITED
+            return@withLock null
+        }
+        throttle.markSent(System.currentTimeMillis())
+
+        val resp = try {
+            getRaw(url)
+        } catch (e: java.io.IOException) {
+            Log.w("DpadTVDouban", "GET 网络失败 ${url.take(90)} → ${e.javaClass.simpleName}: ${e.message}")
+            out.failure = FetchFailure.OFFLINE
+            return@withLock null
+        } catch (e: Exception) {
+            Log.w("DpadTVDouban", "GET 失败 ${url.take(90)} → ${e.javaClass.simpleName}: ${e.message}")
+            out.failure = FetchFailure.UPSTREAM
+            return@withLock null
+        }
+
+        when {
+            resp.code == 403 || resp.code == 418 ||
+                resp.body.contains("检测到有异常请求") || resp.body.contains("\"r\":1") -> {
+                val backoff = throttle.onRateLimited(System.currentTimeMillis(), resp.retryAfter)
+                out.failure = FetchFailure.RATE_LIMITED
+                Log.w("DpadTVDouban", "触发风控（HTTP ${resp.code}，第 ${throttle.strikes()} 次），退避 ${backoff / 60_000} 分钟")
+                null
+            }
+            resp.code !in 200..299 -> {
+                throttle.onServerError(System.currentTimeMillis())
+                out.failure = FetchFailure.UPSTREAM
+                Log.w("DpadTVDouban", "HTTP ${resp.code} ${url.take(80)}")
+                null
+            }
+            resp.body.isBlank() -> {
+                out.failure = FetchFailure.UPSTREAM
+                null
+            }
+            else -> {
+                throttle.onSuccess()
+                out.failure = FetchFailure.NONE
+                out.source = "network"
+                Log.i("DpadTVDouban", "direct OK ${resp.body.length}B ${url.substringAfter("?").take(70)}")
+                resp.body
+            }
+        }
+    }
+
+    /**
+     * 缓存包装。
+     *
+     * `ttlMs` 必须透传到 [readCache]：以前形参收了却恒用 7 天 TTL，
+     * 于是「按 OK 重试」「重新加载」永远读到同一份旧缓存，等于假重试。
+     * `ttlMs <= 0` = 跳过读缓存（用户明确要求强刷），但网络失败时仍用旧缓存兜底。
+     */
+    private suspend fun cached(
+        key: String,
+        ttlMs: Long = TTL,
+        out: Outcome,
+        block: suspend () -> List<MovieItem>,
+    ): List<MovieItem> {
+        if (ttlMs > 0) readCache(key, ttlMs)?.let { return it }
         val items = block()
         if (items.isNotEmpty()) {
             writeCache(key, items)
@@ -219,8 +319,11 @@ class CollectionRepo(private val ctx: Context) {
             MovieItem(
                 title = title,
                 cover = Regex("""src="([^"]+)"""").find(block)?.groupValues?.get(1).orEmpty(),
-                rating = Regex("""class="">([\d.]+)</em>""").find(block)?.groupValues?.get(1)
-                    ?.toDoubleOrNull() ?: 0.0,
+                rating = Regex("""class="rating_num"[^>]*>([\d.]+)<""").find(block)?.groupValues?.get(1)
+                    ?.toDoubleOrNull()
+                    ?: Regex("""class="">([\d.]+)</em>""").find(block)?.groupValues?.get(1)?.toDoubleOrNull()
+                    ?: 0.0,
+                doubanId = Regex("""/subject/(\d+)/""").find(block)?.groupValues?.get(1).orEmpty(),
             )
         }
 
@@ -233,6 +336,7 @@ class CollectionRepo(private val ctx: Context) {
                 cover = Regex("""<img src="([^"]+)"""").find(block)?.groupValues?.get(1).orEmpty(),
                 rating = Regex("""class="rating_nums">([\d.]+)<""").find(block)?.groupValues?.get(1)
                     ?.toDoubleOrNull() ?: 0.0,
+                doubanId = Regex("""/subject/(\d+)/""").find(block)?.groupValues?.get(1).orEmpty(),
             )
         }
 
@@ -278,5 +382,14 @@ class CollectionRepo(private val ctx: Context) {
     companion object {
         /** 与侧车 TTL 对齐：榜单按天变化，7 天内的数据比一次风控值钱 */
         const val TTL = 7 * 24 * 3600_000L
+
+        /** 本地凑够半页就不再联网 */
+        private const val LOCAL_ENOUGH = 6
+        private const val PAGE = 24
+
+        /** 构建期预生成的策展榜标签（build_index.py --lists） */
+        const val TOP250_TAG = "Top250"
+        const val OSCAR_TAG = "奥斯卡"
+        const val OSCAR_DOULIST = "240962"
     }
 }

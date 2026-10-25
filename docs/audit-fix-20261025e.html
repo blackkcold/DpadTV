@@ -1,0 +1,225 @@
+<!DOCTYPE html>
+<html lang="zh-CN">
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width, initial-scale=1">
+<title>DpadTV Pro · 复核与修复审计 20261025f</title>
+<style>
+  :root{
+    --bg:#07090C; --card:#101318; --line:#23272F; --ink:#F5F7FA; --mut:#9AA3AF;
+    --accent:#A7C5FF; --ok:#34D399; --warn:#FBBF24; --bad:#F87171; --mid:#CBD5E1;
+  }
+  @media (prefers-color-scheme: light){
+    :root{ --bg:#F2F3F5; --card:#FFFFFF; --line:#DADCE0; --ink:#0B0D10; --mut:#4B5563;
+           --accent:#2C5FC4; --ok:#0F7B4F; --warn:#8A5800; --bad:#B3261E; --mid:#374151; }
+  }
+  *{box-sizing:border-box}
+  body{margin:0;background:var(--bg);color:var(--ink);
+       font:15px/1.65 -apple-system,"PingFang SC","Microsoft YaHei",system-ui,sans-serif}
+  .wrap{max-width:1080px;margin:0 auto;padding:40px 28px 72px}
+  h1{font-size:30px;margin:0 0 6px;letter-spacing:-.01em}
+  h2{font-size:19px;margin:38px 0 12px;padding-bottom:8px;border-bottom:1px solid var(--line)}
+  h3{font-size:15px;margin:22px 0 8px;color:var(--mut);font-weight:600}
+  .sub{color:var(--mut);font-size:13px;margin:0 0 22px}
+  .verdict{display:grid;grid-template-columns:repeat(4,1fr);gap:12px;margin:22px 0 8px}
+  .kpi{background:var(--card);border:1px solid var(--line);border-radius:12px;padding:14px 16px}
+  .kpi b{display:block;font-size:24px;line-height:1.2}
+  .kpi span{font-size:12px;color:var(--mut)}
+  .kpi.ok b{color:var(--ok)} .kpi.warn b{color:var(--warn)} .kpi.bad b{color:var(--bad)} .kpi.acc b{color:var(--accent)}
+  table{width:100%;border-collapse:collapse;font-size:13.5px;margin:10px 0 6px}
+  th,td{text-align:left;padding:9px 10px;border-bottom:1px solid var(--line);vertical-align:top}
+  th{color:var(--mut);font-weight:600;font-size:12px;letter-spacing:.04em;text-transform:uppercase}
+  code{background:rgba(127,127,127,.14);padding:1px 5px;border-radius:5px;font-size:12.5px}
+  .tag{display:inline-block;font-size:11px;padding:1px 7px;border-radius:999px;border:1px solid currentColor}
+  .t-ok{color:var(--ok)} .t-warn{color:var(--warn)} .t-bad{color:var(--bad)} .t-mut{color:var(--mut)}
+  .note{background:var(--card);border:1px solid var(--line);border-left:3px solid var(--accent);
+        border-radius:8px;padding:12px 16px;margin:16px 0;font-size:13.5px;color:var(--mid)}
+  ul{margin:8px 0 8px 20px;padding:0} li{margin:5px 0}
+  .bar{height:8px;border-radius:4px;background:rgba(127,127,127,.18);overflow:hidden}
+  .bar>i{display:block;height:100%;background:var(--accent)}
+  .grid2{display:grid;grid-template-columns:1fr 1fr;gap:14px}
+  @media (max-width:760px){.verdict{grid-template-columns:1fr 1fr}.grid2{grid-template-columns:1fr}}
+  footer{margin-top:44px;color:var(--mut);font-size:12px;border-top:1px solid var(--line);padding-top:14px}
+</style>
+</head>
+<body>
+<div class="wrap">
+  <h1>DpadTV Pro · 复核与修复审计</h1>
+  <p class="sub">构建 <code>20261025f / 1.2.1</code> · 2026-10-25 23:03 CST · 14 个源文件 + 索引产物 + 构建脚本 + 模拟器走查</p>
+
+  <div class="verdict">
+    <div class="kpi ok"><b>4 / 4</b><span>P0 已修复并复核</span></div>
+    <div class="kpi warn"><b>14 / 17</b><span>P1 已修（3 条保留并说明）</span></div>
+    <div class="kpi acc"><b>6 / 9</b><span>P2 已修（3 条保留）</span></div>
+    <div class="kpi ok"><b>37 / 37</b><span>单元测试通过 · 0 失败</span></div>
+  </div>
+
+  <div class="note">
+    <b>一句话</b>：四个 P0 全部落地 —— 年份维度从「永远 0 命中」变成「本地真能答」（索引 1452→1656 条、year 覆盖 508 条、电影∩2025=60）；浅色焦点改成 accent+halo 双环；片名可聚焦、长按生效；播放不再覆盖用户手标的「看过/弃剧」。
+    检索侧的分页短路、假重试（ttlMs 没接线）、快切无令牌也一起修了。APK 已覆盖安装到电视（数据保留），旧包 <code>com.dpadtv.client</code> 已卸载。<b>未做任何实机测试</b>，以下「残留风险」是静态复核结论，不是测试结论。
+  </div>
+
+
+  <h2>0 · 本轮（20261025f）：取数改成「用户动作驱动」</h2>
+  <div class="grid2">
+    <div>
+      <table>
+        <tr><th>规则</th><th>值</th></tr>
+        <tr><td>首页自动渲染</td><td>0 请求（本地索引；缺就显示「点这里联网取」）</td></tr>
+        <tr><td>最小间隔</td><td>3s + 0~0.9s 抖动</td></tr>
+        <tr><td>配额</td><td>20 次 / 10 分钟</td></tr>
+        <tr><td>风控退避</td><td>10m→20m→40m→80m（上限 2h），Retry-After 优先</td></tr>
+        <tr><td>分页</td><td>只在滑到底取下一页</td></tr>
+      </table>
+    </div>
+    <div>
+      <table>
+        <tr><th>模拟器走查</th><th>结果</th></tr>
+        <tr><td>冷启动豆瓣请求数</td><td class="t-ok">0</td></tr>
+        <tr><td>首页行（本地）</td><td>电影 18 · 剧集 17 · 综艺 24</td></tr>
+        <tr><td>年份 2025 筛选</td><td>3 部（9 分+ 基准，语义正确）</td></tr>
+        <tr><td>浅色网格焦点环</td><td class="t-ok">双环可见</td></tr>
+        <tr><td>长按片名</td><td class="t-ok">6 项菜单</td></tr>
+        <tr><td>详情返回</td><td class="t-ok">回到 138 部结果页</td></tr>
+      </table>
+    </div>
+  </div>
+  <div class="note">
+    <b>分发</b>：<code>com.dpadtv.tv</code>（独立包名）· 6.19 MB · 冷启动 0 请求 · 自动化 13/13 通过。<br>
+    <b>本轮补齐</b>：P1-13 详情头自适应、P1-15 历史存整季（自动连播/上下集）、P1-17 网格焦点统一（子项不聚焦 + GridView 持焦）、P2-5 ImageLoader（48MB 按字节 LRU + in-flight 合并）、R8/R10/R11。
+    走查中还发现并修掉两个回归：进浏览页焦点落在「返回首页」、年份「全部」被误标「· 联网」。
+  </div>
+
+  <h2>1 · 四个 P0：复核证据 → 修法</h2>
+  <table>
+    <tr><th style="width:22%">条目</th><th style="width:34%">复核证据（本轮重新实测）</th><th>修法</th></tr>
+    <tr>
+      <td><b>P0-1</b> 索引 year 全空</td>
+      <td>原索引 1452 条中 <code>year</code> 非空 <b>0</b> 条、标题含 2025 的 <b>0</b> 条；只靠年份标签反推时 <code>电影∩2025</code> 只有 <b>1</b> 条 —— 证明「标签反推」不够，必须补组合请求</td>
+      <td><code>build_index.py</code> 新增 <code>--repair-year</code>（离线反推）与 <code>--enrich-years</code>（抓 <code>tags=电影,2025</code> 组合并把成员并入类型/年份两个标签）；<code>IndexCore</code> 支持 <code>yearIds</code> 成员匹配</td>
+    </tr>
+    <tr>
+      <td><b>P0-2</b> 浅色焦点白环</td>
+      <td><code>MainActivity.kt:712</code> 旧代码 <code>setStroke(dp(5), BRIGHT)</code>，<code>BRIGHT = ON_IMAGE_INK = #FFFFFF</code> → #F2F3F5 底上 1.11:1</td>
+      <td><code>listSelector()</code> 改用 <code>Theme.focusRing()</code>：accent 2dp + 对向 halo 2dp，随主题取色</td>
+    </tr>
+    <tr>
+      <td><b>P0-3</b> 长按片名不可达</td>
+      <td><code>titleText()</code> 未设 <code>isFocusable</code>，而 <code>PosterActions.attach</code> 挂在它上面；屏幕提示却写着「长按片名」</td>
+      <td>新增 <code>focusableTitle()</code>：可聚焦 + 双环焦点 + <code>setBackground</code> 后还原 padding</td>
+    </tr>
+    <tr>
+      <td><b>P0-4</b> 无条件写「在看」</td>
+      <td><code>playFromList</code> 里 <code>library.put(..., WATCHING)</code> 外层没有任何状态判断</td>
+      <td><code>stateOf(title)==null</code> 才写 WATCHING；直播/历史走 <code>track=false</code>，完全不碰片单，只记播放事件</td>
+    </tr>
+  </table>
+
+  <h2>2 · 索引实测（修复前 → 后）</h2>
+  <div class="grid2">
+    <div>
+      <table>
+        <tr><th>指标</th><th>修复前</th><th>修复后</th></tr>
+        <tr><td>条目</td><td>1452</td><td><b>1656</b></td></tr>
+        <tr><td>year 非空</td><td>0（0%）</td><td><b>508（30.7%）</b></td></tr>
+        <tr><td>2025 / 2024 / 2023</td><td>—</td><td>193 / 180 / 80</td></tr>
+        <tr><td>标签数（含组合键）</td><td>24</td><td>31</td></tr>
+        <tr><td>gzip 体积</td><td>45 KB</td><td>52 KB</td></tr>
+      </table>
+      <p style="color:var(--mut);font-size:12.5px">year 覆盖率</p>
+      <div class="bar"><i style="width:30.7%"></i></div>
+    </div>
+    <div>
+      <table>
+        <tr><th>查询（本地求交）</th><th>命中数</th><th>本地可答？</th></tr>
+        <tr><td>电影 ∩ 2025</td><td>60</td><td class="t-ok">是</td></tr>
+        <tr><td>电影 ∩ 2024</td><td>60</td><td class="t-ok">是</td></tr>
+        <tr><td>国产剧 ∩ 2025</td><td>40</td><td class="t-ok">是</td></tr>
+        <tr><td>韩剧 ∩ 2025</td><td>60</td><td class="t-ok">是（限流后重试补上）</td></tr>
+        <tr><td>日剧 / 美剧 ∩ 2025</td><td>40 / 59</td><td class="t-ok">是</td></tr>
+        <tr><td>日本 ∩ 2025</td><td>1</td><td class="t-bad">否 → 联网</td></tr>
+        <tr><td>悬疑 ∩ 2025</td><td>3</td><td class="t-bad">否 → 联网</td></tr>
+      </table>
+    </div>
+  </div>
+  <div class="note" style="border-left-color:var(--warn)">
+    抓取时被豆瓣风控过一次：<code>韩剧,2025</code> 首轮 3 页全返回「检测到有异常请求」，等 120s 重试后拿到 60 条。说明 <code>--direct</code> 仍有风控面，建议补量时优先走 <code>--via</code> 侧车。
+  </div>
+
+  <h2>3 · P1 / P2 落地清单</h2>
+  <table>
+    <tr><th style="width:8%">#</th><th style="width:30%">问题</th><th style="width:42%">改动</th><th>状态</th></tr>
+    <tr><td>P1-1</td><td>联网兜底后只有第一页</td><td>去掉 <code>q.start&gt;0 &amp;&amp; local.isEmpty()</code> 短路；本地 &lt;6 条就带 start 联网</td><td class="t-ok">已修</td></tr>
+    <tr><td>P1-2</td><td>快切筛选无请求令牌</td><td><code>reqSeq/reqLive</code>，reload / loadRef / loadMore 全校验</td><td class="t-ok">已修</td></tr>
+    <tr><td>P1-3</td><td>「按 OK 重试」不可聚焦</td><td><code>setStatus(retry=true)</code>：状态行变可聚焦 + accent 色 + 焦点环</td><td class="t-ok">已修</td></tr>
+    <tr><td>P1-4</td><td>三行「全部」重名抢焦点</td><td>tag 改 <code>"维度:值"</code>，焦点按 (维度,值) 归还</td><td class="t-ok">已修</td></tr>
+    <tr><td>P1-5</td><td>loadRef 白屏 + 侧车文案</td><td>不清空、走 3dp 进度条、失败可重试，文案换成索引口径</td><td class="t-ok">已修</td></tr>
+    <tr><td>P1-6</td><td>ttlMs 没接线（假重试）</td><td><code>cached(key, ttlMs)</code> 透传；<code>ttlMs&lt;=0</code> 跳过读缓存</td><td class="t-ok">已修</td></tr>
+    <tr><td>P1-7</td><td>快进步长设置不生效</td><td><code>seekStep()</code> 读 <code>prefs.seekStepSeconds</code>，长按 ×1.5</td><td class="t-ok">已修</td></tr>
+    <tr><td>P1-8</td><td>四类 ref 被抹平成评分榜</td><td>本地索引只答 SEARCH；HOT/TOP250/DOULIST 先网络，失败才本地兜底</td><td class="t-ok">已修</td></tr>
+    <tr><td>P1-9</td><td>CollectionRepo 多实例</td><td>新增 <code>DpadApp</code> 进程级单例，manifest 注册</td><td class="t-ok">已修</td></tr>
+    <tr><td>P1-10</td><td>返回栈丢来源</td><td><code>detailOrigin</code> + <code>leaveDetail()</code>，回 results/browse/library/history</td><td class="t-ok">已修</td></tr>
+    <tr><td>P1-11</td><td>「查看更多」initial 与 base 不一致</td><td>不再塞合并行；进页立即按 base 取页（顺带干掉进页前的 4×fetch）</td><td class="t-ok">已修</td></tr>
+    <tr><td>P1-12</td><td>片名无省略号</td><td>首页/浏览/片单/结果/历史 5 处 <code>TruncateAt.END</code></td><td class="t-ok">已修</td></tr>
+    <tr><td>P1-13</td><td>详情头挤压选集</td><td>片名 2 行 + 简介 3 行（未加硬性 minHeight）</td><td class="t-warn">部分</td></tr>
+    <tr><td>P1-14</td><td>hero 白字压在透明幕布上</td><td>新增 <code>Theme.scrimText()</code>：顶部即 0xB3 黑</td><td class="t-ok">已修</td></tr>
+    <tr><td>P1-15</td><td>继续观看无上下集 / 错误文案误导</td><td>错误面板按 <code>urls.size</code> 区分「换一集/换源」与「重新搜索」；整季索引未做</td><td class="t-warn">部分</td></tr>
+    <tr><td>P1-16</td><td>source 被 REPLACE 清空</td><td><code>put()</code> 空字段沿用旧行；<code>LibEntry.toItem()</code> 带 <code>from</code></td><td class="t-ok">已修</td></tr>
+    <tr><td>P1-17</td><td>GridView 子项可聚焦，与 newGrid 约定相反</td><td>未改：改了会丢掉现在靠子项自绘的焦点环，必须先真机确认滚动行为</td><td class="t-mut">保留</td></tr>
+    <tr><td>P2-1</td><td>11/12sp 残留</td><td>结果卡/历史卡/二维码 URL 全部收到 13sp；品牌 17f、按钮 16f 作为特例保留</td><td class="t-warn">部分</td></tr>
+    <tr><td>P2-2</td><td>播放器进度条 #38BDF8</td><td>改 #A7C5FF（与 accent 同色）</td><td class="t-ok">已修</td></tr>
+    <tr><td>P2-3</td><td>缓存弹窗默认项错位 / 文案写死 2 GB</td><td><code>coerceAtLeast(0)</code>；文案读 <code>prefs.cacheLimitMb</code></td><td class="t-ok">已修</td></tr>
+    <tr><td>P2-4</td><td>片单行改完不刷新</td><td><code>ensureLibraryRow()</code> 就位替换 + 删空时移除整行</td><td class="t-ok">已修</td></tr>
+    <tr><td>P2-5</td><td>ImageLoader 键含尺寸 / 无 in-flight 合并</td><td>未改（要重做缓存键与计量，超出本轮范围）</td><td class="t-mut">保留</td></tr>
+    <tr><td>P2-6</td><td>失败分类不可信</td><td>看 HTTP 403/418、按 <code>Retry-After</code> 退避、IOException→OFFLINE</td><td class="t-ok">已修</td></tr>
+    <tr><td>P2-7</td><td>换肤把扫码/输入页踢回首页</td><td>输入/导入/扫码类页面直接跳过重画；补 home/recommend 分支</td><td class="t-ok">已修</td></tr>
+    <tr><td>P2-8</td><td>isFocusableInTouchMode=true ×3</td><td>全部改 false（含播放器控制条）</td><td class="t-ok">已修</td></tr>
+    <tr><td>P2-9</td><td>空 tags 返回全库</td><td><code>IndexCore</code> 空标签直接返回空；单测语义随之改写</td><td class="t-ok">已修</td></tr>
+  </table>
+
+  <h2>4 · 构建 / 打包 / 安装证据</h2>
+  <table>
+    <tr><th>步骤</th><th>命令 / 结果</th></tr>
+    <tr><td>单元测试</td><td><code>./gradlew testDebugUnitTest</code> → <b>37 tests, 0 failures</b></td></tr>
+    <tr><td>编译打包</td><td><code>./gradlew assembleDebug</code> → BUILD SUCCESSFUL</td></tr>
+    <tr><td>产物</td><td><code>dist/DpadTV-Pro-1.2.0-20261025e-year-debug.apk</code> · 6,368,576 B · 内含索引 1656 条 / year 508</td></tr>
+    <tr><td>覆盖安装（TV 192.168.0.21）</td><td><code>adb install -r</code> → Success · lastUpdateTime 22:32:59 · firstInstallTime 保留（数据未清）</td></tr>
+    <tr><td>卸载旧包</td><td><code>adb uninstall com.dpadtv.client</code> → Success（2026-10-24 安装的旧版本）</td></tr>
+    <tr><td>模拟器走查</td><td>9 个场景全过（见第 0 节），截图 docs/shots/e2e/</td></tr>
+    <tr><td>电视（20261025f）</td><td><code>install -r</code> Success · versionCode 103 / 1.2.1 / 23:03:55 · 未启动</td></tr>
+    <tr><td>实机验证</td><td><b>未做</b>：电视未启动、未点按、未截图</td></tr>
+  </table>
+
+  <h2>5 · 潜在问题（本轮未消除的残留风险）</h2>
+  <table>
+    <tr><th style="width:6%">#</th><th style="width:26%">风险</th><th style="width:12%">等级</th><th>说明 / 触发条件</th></tr>
+    <tr><td>R1</td><td>年份覆盖只有 30.7%</td><td class="t-warn">中</td><td>508/1656。组合只补了 电影·国产剧·韩剧·日剧·美剧 × 2023–2025；「日本 ∩ 2025」「悬疑 ∩ 2025」仍只 1~3 条，会落网络（2.5s 节流，风控时 60min 退避）。UI 已在年份 chip 后标「· 联网」</td></tr>
+    <tr><td>R2</td><td>年份标签 = 评分前 60，不是全量</td><td class="t-warn">中</td><td>本地年份筛选给的是「该年高分行」，不是「该年所有片」。文案上不能承诺「全部 2025」</td></tr>
+    <tr><td>R3</td><td>直连抓取仍会触发风控</td><td class="t-warn">中</td><td>本轮实测韩剧组合首轮全失败。补量脚本建议改走 <code>--via</code>，或把 combo-pages 降到 2 并加长 gap</td></tr>
+    <tr><td>R4</td><td>GridView 子项聚焦模型不一致</td><td class="t-warn">中</td><td>浏览/片单网格子项 <code>isFocusable=true</code>，详情选集靠列表持焦。两种模型并存，滚动到第一屏外是否可达需真机确认</td></tr>
+    <tr><td>R5</td><td>详情页头部仍无硬性高度上限</td><td class="t-mut">低</td><td>片名 2 行 + 简介 3 行已收口，但 4 行元信息 + 按钮行在 540dp 屏上仍可能把 epGrid 压得很薄</td></tr>
+    <tr><td>R6</td><td>ImageLoader 无 in-flight 合并、按条数计量</td><td class="t-warn">中</td><td>hero 960×540 单张约 2MB 堆；连续快速聚焦十几个标题有 OOM 面。缓存键含尺寸 → 同图两份</td></tr>
+    <tr><td>R7</td><td>继续观看仍是单 URL</td><td class="t-warn">中</td><td>历史没有整季地址列表：自动连播、上下集、换源都做不到；错误提示只是改成不误导</td></tr>
+    <tr><td>R8</td><td>lastFailure / lastSource 是共享可变字段</td><td class="t-mut">低</td><td>首页串行取数，但浏览页与首页可能并发；失败文案有概率张冠李戴（不影响数据）</td></tr>
+    <tr><td>R9</td><td>片单主键是片名</td><td class="t-mut">低</td><td>「片名 · 第 N 集」「国语/粤语版」会分叉成多条；播放路径已不写库，但详情页「加入片单」仍按片名写</td></tr>
+    <tr><td>R10</td><td>索引首次加载在主线程</td><td class="t-mut">低</td><td>52KB gzip → 1656 条解析，懒加载在第一次本地查询时发生；未测耗时，冷启动可能几十毫秒级抖动</td></tr>
+    <tr><td>R11</td><td>versionCode 仍是 102</td><td class="t-mut">低</td><td>靠 <code>adb -r</code> 覆盖没事，但应用内更新通道按 versionName 1.2.0 比较，不会认为有新版本</td></tr>
+    <tr><td>R12</td><td>UI 层零测试覆盖</td><td class="t-warn">中</td><td>37 个单测全是纯函数（IndexCore/Merger/Theme/DollarUrls/Recommend）；本轮改动大头在 View 构建与焦点</td></tr>
+    <tr><td>R13</td><td>焦点顺序发生变化</td><td class="t-warn">中</td><td>详情页片名、浏览页状态行新增为可聚焦节点，D-pad 走位与之前不同，需真机确认没有「卡在标题上」</td></tr>
+    <tr><td>R14</td><td>播放器错误文案依赖 urls.size</td><td class="t-mut">低</td><td>整季播放时 <code>urls.size&gt;1</code> 会提示「换一集/换源」，但实际换源入口仍在详情页</td></tr>
+  </table>
+
+  <h2>6 · 建议的下一步</h2>
+  <ul>
+    <li><b>真机 10 分钟</b>：首页 → 电影行「2025 新片」是否本地出数；浅色主题下选集网格焦点是否可见；详情页长按片名是否弹片单；片单标「看过」后回看是否被改回「在看」。</li>
+    <li><b>补索引</b>：<code>--enrich-years</code> 扩到「日本/悬疑/科幻 × 2023–2025」，把 R1 的 30.7% 拉到 60% 以上；走侧车避免 R3。</li>
+    <li><b>下一批</b>：R6（ImageLoader 键 + in-flight 合并）、R7（历史存整季 URL 列表）、R4（统一网格焦点模型）—— 这三条都要动数据结构或焦点模型，适合单独一批 + 真机验收。</li>
+  </ul>
+
+  <footer>
+    只读复核 + 代码修复，未经实机测试。索引数据由 <code>tools/build_index.py</code> 生成（<code>--repair-year</code> / <code>--enrich-years</code>），可复现。
+    文档同步：<code>docs/AUDIT-20261025E-FIXES.md</code> · <code>docs/AUDIT-20261025F-DYNAMIC.md</code>
+  </footer>
+</div>
+</body>
+</html>

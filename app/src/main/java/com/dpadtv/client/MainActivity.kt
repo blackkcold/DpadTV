@@ -56,12 +56,17 @@ class MainActivity : Activity() {
     private lateinit var prefs: Prefs
     private lateinit var api: Api
     private val library by lazy { LibraryStore(this) }
+    /** 进程级仓库（含 45KB 索引 + 节流/退避状态），见 [DpadApp] */
+    private val repo by lazy { (application as DpadApp).repo }
     private lateinit var imageLoader: ImageLoader
     private lateinit var root: FrameLayout
     private val scope = CoroutineScope(SupervisorJob() + Dispatchers.Main.immediate)
     private var job: Job? = null
 
     private var lastResults: List<SearchItem> = emptyList()
+    /** 这次搜索是冲着哪部片去的（片名 + 年份）；用来在同一堆同名命中里挑最像的那条 */
+    private var wantTitle = ""
+    private var wantYear = ""
     private var recommendItems: List<DoubanItem> = emptyList()
     private var liveChannels: List<Channel> = emptyList()
     private var liveChannelSource: String = ""
@@ -78,12 +83,14 @@ class MainActivity : Activity() {
     private var busyDialog: AlertDialog? = null
     /** 当前界面名，用于实现遥控器 BACK 的层级回退（否则任何界面按返回都会直接退出应用）。 */
     private var currentScreen = "setup"
-    /** 详情页是从结果页进的？决定 BACK 是回结果（保住上下文）还是回首页 */
-    private var detailFromResults = false
+    /** 详情页是从哪一屏进来的：BACK 要回到原处（筛选/片单/历史），不是一律回首页 */
+    private var detailOrigin = ""
     /** 换肤重画用：详情页入参缓存，避免用户改主题就丢片 */
     private var lastDetailItem: SearchItem? = null
     private var lastDetailData: Detail? = null
     private var lastShelf: Shelf? = null
+    /** 启动页的连接失败原因：写在页面上，不弹模态框挡住「先看本地榜单」 */
+    private var bootError = ""
     /** 上一次搜索词，空态文案要用 */
     private var lastKeyword = ""
     /** 直播分组是否还没被用户手动选过（用于"默认进第一个分组"） */
@@ -119,6 +126,17 @@ class MainActivity : Activity() {
         if (!force && light == Theme.isLight) return false
         Theme.bind(light)
         if (::root.isInitialized) root.setBackgroundColor(Theme.BG)
+        // 沉浸式下窗口仍是 edge-to-edge：把装饰层也刷成主题底色，
+        // 否则浅色主题顶部会留一条黑边（模拟器 1080p 实测 60px）
+        window.decorView.setBackgroundColor(Theme.BG)
+        window.statusBarColor = Theme.BG
+        window.navigationBarColor = Theme.BG
+        if (android.os.Build.VERSION.SDK_INT >= 30) {
+            window.insetsController?.setSystemBarsAppearance(
+                if (light) android.view.WindowInsetsController.APPEARANCE_LIGHT_STATUS_BARS else 0,
+                android.view.WindowInsetsController.APPEARANCE_LIGHT_STATUS_BARS,
+            )
+        }
         return true
     }
 
@@ -142,7 +160,12 @@ class MainActivity : Activity() {
      */
     private fun rerenderForTheme() {
         if (!::root.isInitialized) return
+        // 输入/导入/扫码带着不可重建的临时状态（输入框内容、本地文件浏览位置、二维码服务），
+        // 换肤时宁可不重画，也不能把用户正在做的事清掉（审计 P2-7）
+        if (currentScreen in setOf("input", "manualadd", "files", "import", "addsource", "qradd")) return
         when (currentScreen) {
+            "home" -> showHome()
+            "recommend" -> showRecommend()
             "detail" -> {
                 val item0 = lastDetailItem
                 val detail0 = lastDetailData
@@ -484,7 +507,7 @@ class MainActivity : Activity() {
             "qradd" -> { qrServer?.stop(); qrServer = null; showSources() }
             "results" -> showHome()
             "serversettings" -> showSetup()
-            "detail" -> if (detailFromResults && lastResults.isNotEmpty()) showResults() else showRecommend()
+            "detail" -> leaveDetail()
             "live", "setup", "history" -> showRecommend()
             "sources" -> if (sourcesOrigin == "setup") showSetup() else showRecommend()
             "home", "recommend", "shelves" -> super.onBackPressed()
@@ -560,7 +583,7 @@ class MainActivity : Activity() {
         // 字标：Dpad 白 + TV 高亮
         row.addView(
             TextView(this).apply {
-                val text = SpannableString("DpadTV Pro")
+                val text = SpannableString(BuildConfig.APP_NAME)
                 text.setSpan(ForegroundColorSpan(TEXT_COLOR), 0, 4, Spanned.SPAN_EXCLUSIVE_EXCLUSIVE)
                 text.setSpan(ForegroundColorSpan(ACCENT), 4, 6, Spanned.SPAN_EXCLUSIVE_EXCLUSIVE)
                 text.setSpan(StyleSpan(Typeface.BOLD), 0, 6, Spanned.SPAN_EXCLUSIVE_EXCLUSIVE)
@@ -580,6 +603,23 @@ class MainActivity : Activity() {
             setText(text)
             setTextSize(size)
             setTextColor(Theme.INK)
+        }
+
+    /**
+     * 详情页片名：**必须可聚焦**。
+     * 长按（加入片单）是发给持焦控件的事件，TextView 默认不可聚焦 →
+     * 屏幕上写着「长按片名可加入片单」，遥控器按下去 100% 没反应（审计 P0-3）。
+     */
+    private fun focusableTitle(text: String, size: Float = Theme.HERO): TextView =
+        titleText(text, size).apply {
+            isFocusable = true
+            isFocusableInTouchMode = false
+            val l = paddingLeft; val t = paddingTop; val r = paddingRight; val b = paddingBottom
+            setOnFocusChangeListener { v, f ->
+                v.background = if (f) Theme.focusRing(this@MainActivity, Theme.RADIUS) else null
+                // setBackground 会用 drawable 的 padding 覆盖控件 padding，换完立刻还回去
+                v.setPadding(l, t, r, b)
+            }
         }
 
     private fun hintText(text: String): TextView =
@@ -645,7 +685,7 @@ class MainActivity : Activity() {
         Button(this).apply {
             setText(label)
             isAllCaps = false
-            setTextSize(16f)
+            setTextSize(Theme.BODY)
             isSingleLine = true
             setTextColor(if (primary) INK else TEXT_COLOR)
             // 按内容自适应宽度：固定 dp 宽度在低分辨率电视上会被挤出屏幕
@@ -705,14 +745,9 @@ class MainActivity : Activity() {
      * 导致「焦点在按钮上，集数行还亮着」两个框同时出现。
      */
     private fun listSelector(): android.graphics.drawable.Drawable {
-        val ring = InsetDrawable(
-            GradientDrawable().apply {
-                setColor(Color.TRANSPARENT)
-                cornerRadius = dp(8).toFloat()
-                setStroke(dp(5), BRIGHT)
-            },
-            dp(3),
-        )
+        // 双环（accent 2dp + 对向 halo 2dp）＋ 内缩 3dp。
+        // 旧版是 5dp 纯白环：浅色主题底色 #F2F3F5 上实测 1.11:1，等于没有焦点。
+        val ring = InsetDrawable(Theme.focusRing(this, Theme.RADIUS), dp(3))
         val empty = android.graphics.drawable.ColorDrawable(Color.TRANSPARENT)
         return android.graphics.drawable.StateListDrawable().apply {
             addState(intArrayOf(android.R.attr.state_focused), ring)
@@ -722,7 +757,8 @@ class MainActivity : Activity() {
 
     private fun newList(): ListView = ListView(this).apply {
         isFocusable = true
-        isFocusableInTouchMode = true
+        // 触摸模式下也要「点一下 = 选中」，不要「点一下只聚焦、再点一下才触发」
+        isFocusableInTouchMode = false
         // 电视列表：不要右边那条系统滚动条（和深色背景打架），行间用极淡分隔线
         isVerticalScrollBarEnabled = false
         divider = android.graphics.drawable.ColorDrawable(Theme.HAIRLINE)
@@ -769,7 +805,7 @@ class MainActivity : Activity() {
      */
     private fun newGrid(): GridView = GridView(this).apply {
         isFocusable = true
-        isFocusableInTouchMode = true
+        isFocusableInTouchMode = false
         setSelector(listSelector())
     }
 
@@ -817,42 +853,71 @@ class MainActivity : Activity() {
     /* --------------------------------------------------------- 启动与服务器配置 */
 
     /** 启动页：先自动连服务器（同时拉取服务端下发的片源配置），再进首页。 */
-    private fun showBoot() {
+    private fun showBoot(startConnect: Boolean = true) {
         currentScreen = "boot"
         val col = LinearLayout(this).apply {
             orientation = LinearLayout.VERTICAL
             setPadding(dp(56), dp(36), dp(56), dp(36))
         }
-        col.addView(titleText("正在连接服务器…", 22f))
+        col.addView(titleText(if (bootError.isEmpty()) "正在连接服务器…" else "连不上服务器", 22f))
         col.addView(hintText(api.baseUrl))
+        if (bootError.isNotEmpty()) {
+            col.addView(TextView(this).apply {
+                text = bootError
+                setTextSize(Theme.CAPTION)
+                setTextColor(Theme.DANGER)
+                setPadding(0, dp(2), 0, dp(10))
+            })
+        }
         col.addView(button("手动设置服务器", primary = true) { showSetup() })
         col.addView(button("重新连接") { autoConnect() })
+        // 榜单索引在 APK 里：没有服务器也能翻。给一条不依赖外部服务的入口，
+        // 既避免「服务器一挂就全黑」，也符合「少向外部要数据」的取向。
+        col.addView(button("先看本地榜单") { showShelves() })
         setScreen(col)
-        autoConnect()
+        if (startConnect) autoConnect()
     }
 
+    /**
+     * 自动连接。失败**不弹模态框** —— 启动页上已经写清原因并给了三条出路，
+     * 弹窗只会在离线时把「先看本地榜单」挡死（模拟器实测）。
+     */
     private fun autoConnect() {
-        runApi("正在连接服务器…", {
-            val first = api.status()
-            val st = if (first.passwordRequired && !first.verified) {
-                api.login(prefs.password)
-            } else {
-                first
-            }
-            // 服务端还可能下发 DEFAULT_SUBSCRIPTIONS（订阅链接），需要再解析一次；
-            // 解析失败（例如内网地址被防 SSRF 拦掉）不影响其它通道
-            val subSources = if (prefs.sources().isEmpty() && st.defaultSources.isEmpty()) {
-                st.defaultSubscriptions.flatMap { url ->
-                    runCatching { api.importSourceList(url) }.getOrDefault(emptyList())
+        job?.cancel()
+        job = scope.launch {
+            bootError = ""
+            if (currentScreen == "boot") showBoot(startConnect = false)
+            val result = try {
+                withContext(Dispatchers.IO) {
+                    val first = api.status()
+                    val st = if (first.passwordRequired && !first.verified) api.login(prefs.password) else first
+                    // 服务端还可能下发 DEFAULT_SUBSCRIPTIONS（订阅链接），需要再解析一次；
+                    // 解析失败（例如内网地址被防 SSRF 拦掉）不影响其它通道
+                    val subSources = if (prefs.sources().isEmpty() && st.defaultSources.isEmpty()) {
+                        st.defaultSubscriptions.flatMap { url ->
+                            runCatching { api.importSourceList(url) }.getOrDefault(emptyList())
+                        }
+                    } else {
+                        emptyList()
+                    }
+                    st to subSources
                 }
-            } else {
-                emptyList()
+            } catch (e: Exception) {
+                bootError = describe(e)
+                if (currentScreen == "boot") {
+                    showBoot(startConnect = false)
+                } else {
+                    dlg().setTitle("连接失败").setMessage(bootError)
+                        .setPositiveButton("重试") { _, _ -> autoConnect() }
+                        .setNegativeButton("先看本地榜单") { _, _ -> showShelves() }
+                        .show()
+                }
+                return@launch
             }
-            st to subSources
-        }, { (st, subSources) ->
-            seedFromServer(st, subSources)
-            showRecommend()
-        })
+            seedFromServer(result.first, result.second)
+            // 用户已经主动进了本地榜单，就别把他踢回推荐页
+            if (currentScreen == "boot" || currentScreen == "setup") showRecommend()
+        }
     }
 
     /**
@@ -1199,7 +1264,7 @@ class MainActivity : Activity() {
             addView(TextView(this@MainActivity).apply {
                 setText(url)
                 setTextColor(Theme.ACCENT)
-                setTextSize(11f)
+                setTextSize(Theme.CAPTION)
                 setPadding(0, dp(6), 0, 0)
             })
         }
@@ -1310,7 +1375,12 @@ class MainActivity : Activity() {
     private fun showClearPlaybackCache() {
         val bytes = PlaybackCache.sizeBytes(this)
         val mb = bytes / 1024.0 / 1024.0
-        val text = String.format(java.util.Locale.US, "当前占用 %.1f MB\n上限 2 GB，超出后自动淘汰最久未用的片段。", mb)
+        val text = String.format(
+            java.util.Locale.US,
+            "当前占用 %.1f MB\n上限 %s，超出后自动淘汰最久未用的片段。",
+            mb,
+            if (prefs.cacheLimitMb >= 1024) "${prefs.cacheLimitMb / 1024} GB" else "${prefs.cacheLimitMb} MB",
+        )
         dlg()
             .setTitle("播放缓存")
             .setMessage(text)
@@ -1425,7 +1495,7 @@ class MainActivity : Activity() {
                     5 -> chooseOption(
                         "播放缓存上限",
                         listOf("512 MB", "1 GB", "2 GB", "4 GB"),
-                        listOf(512, 1024, 2048, 4096).indexOf(prefs.cacheLimitMb).coerceAtLeast(2),
+                        listOf(512, 1024, 2048, 4096).indexOf(prefs.cacheLimitMb).coerceAtLeast(0),
                     ) { i ->
                         prefs.cacheLimitMb = listOf(512, 1024, 2048, 4096)[i]
                         PlaybackCache.recreate(this)
@@ -2299,7 +2369,11 @@ class MainActivity : Activity() {
         } else {
             lastResults.filter { it.sourceName == sourceFilter }
         }
-        resultGroups = visible.groupBy { it.name }.map { (title, items) -> title to items }
+        // 同名命中可能有十几条（1957 正片 / 2025 短剧 / 电影解说…），
+        // 组内按「像不像用户要的那部」排序，组间用最佳分排序，first() 才是对的
+        resultGroups = visible.groupBy { it.name }
+            .map { (title, items) -> title to HitPicker.rank(items, wantTitle, wantYear) }
+            .sortedByDescending { (_, items) -> HitPicker.score(items.first(), wantTitle, wantYear) }
 
         val col = LinearLayout(this).apply {
             orientation = LinearLayout.VERTICAL
@@ -2377,18 +2451,20 @@ class MainActivity : Activity() {
                         orientation = LinearLayout.VERTICAL
                         setPadding(dp(12), 0, 0, 0)
                         addView(TextView(this@MainActivity).apply {
-                            setTextSize(15f)
+                            setTextSize(Theme.BODY)
                             setTextColor(TEXT_COLOR)
                             maxLines = 2
+                            ellipsize = android.text.TextUtils.TruncateAt.END
                         })
                         addView(TextView(this@MainActivity).apply {
-                            setTextSize(12f)
+                            setTextSize(Theme.CAPTION)
                             setTextColor(Theme.MUTED)
-                            maxLines = 2
+                            maxLines = 1
+                            ellipsize = android.text.TextUtils.TruncateAt.END
                             setPadding(0, dp(4), 0, 0)
                         })
                         addView(TextView(this@MainActivity).apply {
-                            setTextSize(11f)
+                            setTextSize(Theme.CAPTION)
                             setTextColor(Theme.MUTED)
                             maxLines = 2
                             setPadding(0, dp(4), 0, 0)
@@ -2584,7 +2660,9 @@ class MainActivity : Activity() {
         listView.requestFocus()
     }
 
-    private fun doSearch(keyword: String) {
+    private fun doSearch(keyword: String, year: String = "") {
+        wantTitle = keyword
+        wantYear = year
         val kw = keyword.trim()
         if (kw.isEmpty()) { toast("请输入片名"); return }
         lastKeyword = kw
@@ -2634,7 +2712,8 @@ class MainActivity : Activity() {
     /* --------------------------------------------------------------- 详情页 */
 
     private fun openDetail(item: SearchItem) {
-        detailFromResults = currentScreen == "results"
+        // 换源时 currentScreen 已经是 detail，别把来源改成 "detail"
+        if (currentScreen != "detail") detailOrigin = currentScreen
         val source = prefs.sources().firstOrNull { it.url == item.sourceUrl }
             ?: SourceConfig(item.sourceName, item.sourceUrl)
         runApi("正在获取详情…", { api.detail(item.vodId, source) }, { detail ->
@@ -2644,6 +2723,24 @@ class MainActivity : Activity() {
             }
             showDetail(item, detail)
         })
+    }
+
+    /**
+     * 离开详情页：回到**进来的那一屏**。
+     * 旧版一律 showRecommend()，而从筛选页/片单/历史进来的用户会发现自己被踢回首页（审计 P1-10）。
+     */
+    private fun leaveDetail() {
+        val origin = detailOrigin
+        detailOrigin = ""
+        when (origin) {
+            "results" -> if (lastResults.isNotEmpty()) showResults() else showHome()
+            "browse" -> lastShelf?.let { openShelf(it) } ?: showShelves()
+            "library" -> showLibrary()
+            "history" -> showHistoryCards()
+            "home" -> showHome()
+            "shelves" -> showShelves()
+            else -> homeRoot()
+        }
     }
 
     private fun showDetail(item: SearchItem, detail: Detail) {
@@ -2665,9 +2762,7 @@ class MainActivity : Activity() {
             gravity = Gravity.CENTER_VERTICAL
             setPadding(0, dp(4), 0, dp(12))
         }
-        topBar.addView(button("‹ 返回") {
-            if (detailFromResults && lastResults.isNotEmpty()) showResults() else showRecommend()
-        })
+        topBar.addView(button("‹ 返回") { leaveDetail() })
         topBar.addView(View(this), LinearLayout.LayoutParams(0, dp(1), 1f))
         topBar.addView(TextView(this).apply {
             text = "长按片名可加入片单"
@@ -2688,7 +2783,10 @@ class MainActivity : Activity() {
             orientation = LinearLayout.VERTICAL
             setPadding(dp(24), 0, 0, 0)
         }
-        val titleView = titleText(detail.info.title.ifEmpty { item.name }, Theme.HERO)
+        val titleView = focusableTitle(detail.info.title.ifEmpty { item.name }, Theme.HERO).apply {
+            maxLines = 2
+            ellipsize = android.text.TextUtils.TruncateAt.END
+        }
         // 详情页也能收进片单：长按片名（和首页/结果页同一个手势）
         runCatching {
             val libItem = MovieItem(
@@ -2716,7 +2814,9 @@ class MainActivity : Activity() {
                 setText(descText)
                 setTextColor(Theme.MUTED)
                 setTextSize(Theme.BODY)
-                maxLines = 5
+                // 540dp 的老盒子上简介吃 3 行会把选集网格挤到 <40dp，按屏高收一行
+                maxLines = if (resources.displayMetrics.heightPixels < 720) 2 else 3
+                ellipsize = android.text.TextUtils.TruncateAt.END
             })
         }
         // 主按钮：一键开播（有进度就从上次那集继续），比"在 100 个格子里找第几集"快得多
@@ -2734,11 +2834,17 @@ class MainActivity : Activity() {
                 if (resumeIdx > 0) resumeIdx else 0,
                 detail.info.title.ifEmpty { item.name },
                 detail.info.cover.ifEmpty { item.pic },
+                refKey = LibKey.ref(item.sourceUrl, item.vodId),
             )
         })
         actions.addView(button("加入片单") {
             val t = detail.info.title.ifEmpty { item.name }
-            library.put(MovieItem(title = t, cover = detail.info.cover.ifEmpty { item.pic }), LibState.FAV)
+            // 带上播放源身份：同一个片名在不同源/不同年份是不同的作品，片单要能区分
+            library.put(
+                MovieItem(title = t, cover = detail.info.cover.ifEmpty { item.pic }),
+                LibState.FAV,
+                LibKey.ref(item.sourceUrl, item.vodId),
+            )
             library.event(t, 0)
             toast("已加入「收藏」")
         })
@@ -2817,6 +2923,7 @@ class MainActivity : Activity() {
                 position,
                 detail.info.title.ifEmpty { item.name },
                 detail.info.cover.ifEmpty { item.pic },
+                refKey = LibKey.ref(item.sourceUrl, item.vodId),
             )
         }
         col.addView(epGrid, LinearLayout.LayoutParams(
@@ -2834,19 +2941,43 @@ class MainActivity : Activity() {
         }
     }
 
-    /** 单集播放（直播频道、观看历史都用这个） */
-    private fun play(url: String, title: String) = playFromList(listOf(url), 0, title)
+    /**
+     * 从观看历史继续：有整季地址列表就交给播放器（能自动连播、能上下集），
+     * 老记录只有单集地址时退回单集播放。
+     */
+    private fun playHistory(h: HistoryEntry) {
+        val list = h.urls.ifEmpty { listOf(h.playUrl) }
+        playFromList(list, h.index.coerceIn(0, list.size - 1), h.title, h.cover, track = false)
+    }
 
-    /** 整季播放：把整个集数列表交给播放器，一集放完自动进下一集 */
-    private fun playFromList(urls: List<String>, index: Int, title: String, cover: String = "") {
+    /** 单集播放（直播频道用）：不写片单 —— 它们不是「片单里的一条」 */
+    private fun play(url: String, title: String) =
+        playFromList(listOf(url), 0, title, track = false)
+
+    /**
+     * 整季播放：把整个集数列表交给播放器，一集放完自动进下一集。
+     *
+     * @param track 是否把这次播放写进片单/推荐画像。直播与历史传 false。
+     */
+    private fun playFromList(
+        urls: List<String>,
+        index: Int,
+        title: String,
+        cover: String = "",
+        track: Boolean = true,
+        refKey: String = "",
+    ) {
         if (urls.isEmpty()) return
-        // 点开播放 = 明确的兴趣信号：自动落到「在看」，并记一条事件（推荐画像用）
-        runCatching {
-            library.put(
-                MovieItem(title = title, cover = cover),
-                LibState.WATCHING,
-            )
-            library.event(title, 1)
+        if (track) {
+            // 播放是兴趣信号，但**不能覆盖用户显式标注的状态**：
+            // 旧版无条件 put(WATCHING)，用户标了「看过/弃剧」，回看一次就被改回「在看」（审计 P0-4）。
+            runCatching {
+                val probe = MovieItem(title = title, cover = cover)
+                if (library.stateOf(probe, refKey) == null) {
+                    library.put(probe, LibState.WATCHING, refKey)
+                }
+                library.event(title, 1)
+            }
         }
         startActivity(Intent(this, PlayerActivity::class.java).apply {
             putStringArrayListExtra(PlayerActivity.EXTRA_URLS, ArrayList(urls))
@@ -3031,7 +3162,7 @@ class MainActivity : Activity() {
                 items.map { "${it.title}    ${formatTime(it.positionMs)} / ${formatTime(it.durationMs)}" },
                 onItem = { idx ->
                     val h = items[idx]
-                    play(h.playUrl, h.title)
+                    playHistory(h)
                 },
             )
             listView.setOnItemLongClickListener { _, _, pos, _ ->
@@ -3114,11 +3245,14 @@ class MainActivity : Activity() {
                                 orientation = LinearLayout.VERTICAL
                                 setPadding(dp(12), 0, 0, 0)
                                 addView(TextView(this@MainActivity).apply {
-                                    setTextSize(15f); setTextColor(TEXT_COLOR); maxLines = 2
+                                    setTextSize(Theme.BODY); setTextColor(TEXT_COLOR); maxLines = 2
+                                    ellipsize = android.text.TextUtils.TruncateAt.END
                                 })
                                 addView(TextView(this@MainActivity).apply {
-                                    setTextSize(12f); setTextColor(Theme.MUTED)
-                                    maxLines = 1; setPadding(0, dp(4), 0, 0)
+                                    setTextSize(Theme.CAPTION); setTextColor(Theme.MUTED)
+                                    maxLines = 1
+                                    ellipsize = android.text.TextUtils.TruncateAt.END
+                                    setPadding(0, dp(4), 0, 0)
                                 })
                             },
                             LinearLayout.LayoutParams(0, ViewGroup.LayoutParams.WRAP_CONTENT, 1f),
@@ -3135,12 +3269,12 @@ class MainActivity : Activity() {
                     imageLoader.load(h.cover, dp(120), dp(170)) { bmp ->
                         if (poster.tag == h.cover) poster.setImageBitmap(bmp)
                     }
-                    cell.setOnClickListener { play(h.playUrl, h.title) }
+                    cell.setOnClickListener { playHistory(h) }
                     return cell
                 }
             }
             grid.setOnItemClickListener { _, _, pos, _ ->
-                items2.getOrNull(pos)?.let { play(it.playUrl, it.title) }
+                items2.getOrNull(pos)?.let { playHistory(it) }
             }
             grid.setOnItemLongClickListener { _, _, pos, _ ->
                 prefs.removeHistory(items2[pos].playUrl)
@@ -3184,9 +3318,9 @@ class MainActivity : Activity() {
         val screen = ShelvesScreen(
             this,
             imageLoader,
-            CollectionRepo(this),
+            repo,
             library,
-            onOpenTitle = { doSearch(it) },
+            onOpenTitle = { doSearch(it.title, it.year) },
             onMore = { shelf -> openShelf(shelf) },
             onLibrary = { showLibrary() },
             nav = listOf(
@@ -3204,22 +3338,19 @@ class MainActivity : Activity() {
     private fun showLibrary() {
         currentScreen = "library"
         setScreen(
-            LibraryScreen(this, imageLoader, library, onOpenTitle = { doSearch(it) }, onBack = { showShelves() }).build(),
+            LibraryScreen(this, imageLoader, library, onOpenTitle = { doSearch(it.title, it.year) }, onBack = { showShelves() }).build(),
         )
     }
 
-    /** 「查看更多」：把这一行的合并结果铺成网格（M2 会加 chip 与筛选器）。 */
+    /** 「查看更多」：把这一行的合并结果铺成网格 */
     private fun openShelf(shelf: Shelf) {
         currentScreen = "browse"
         lastShelf = shelf
-        val repo = CollectionRepo(this)
-        scope.launch {
-            // 先把首页已经算好的合并结果带进去：进「查看更多」是秒开，不额外打豆瓣
-            val initial = Merger.merge(shelf.refs.map { it to repo.fetch(it) }, shelf.size)
-            setScreen(
-                BrowseScreen(this@MainActivity, imageLoader, repo, library, shelf, initial, { showShelves() }) { doSearch(it) }.build(),
-            )
-        }
+        // 立即进页面，由 BrowseScreen 自己按 base 取第一页：
+        // 以前先 await 4 个榜的 fetch 才 setScreen，慢网下「查看更多」像没反应。
+        setScreen(
+            BrowseScreen(this@MainActivity, imageLoader, repo, library, shelf, { showShelves() }) { doSearch(it.title, it.year) }.build(),
+        )
     }
 
     private fun showRecommend() {

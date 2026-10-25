@@ -8,7 +8,7 @@ import org.junit.Test
 class RecommendTest {
 
     private fun entry(title: String, source: String, state: LibState, daysAgo: Long = 0) = LibEntry(
-        title = title, cover = "", doubanId = "", rating = 8.0, state = state,
+        id = LibKey.legacyTitleKey(title), title = title, cover = "", doubanId = "", rating = 8.0, state = state,
         updatedAt = System.currentTimeMillis() - daysAgo * 86_400_000, source = source,
     )
 

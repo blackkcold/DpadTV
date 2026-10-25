@@ -24,7 +24,7 @@ class LibraryScreen(
     private val host: Activity,
     private val loader: ImageLoader,
     private val store: LibraryStore,
-    private val onOpenTitle: (String) -> Unit,
+    private val onOpenTitle: (MovieItem) -> Unit,
     private val onBack: () -> Unit,
 ) {
 
@@ -101,12 +101,22 @@ class LibraryScreen(
             horizontalSpacing = dp(12)
             verticalSpacing = dp(10)
             setPadding(0, dp(10), 0, 0)
+            isFocusable = true
+            // 网格本身要在触摸模式下也能拿焦点：子项已不可聚焦，否则进页后焦点会落到「返回首页」上
+            isFocusableInTouchMode = true
+            // 子项不再聚焦：焦点落在列表上，由 selector 画双环（和详情页选集同一套）
+            setSelector(android.graphics.drawable.InsetDrawable(Theme.focusRing(host, Theme.RADIUS), dp(2)))
             this.adapter = this@LibraryScreen.adapter
+            setOnItemClickListener { _, _, pos, _ ->
+                items.getOrNull(pos)?.let { onOpenTitle(it.toItem()) }
+            }
         }
         col.addView(grid, LinearLayout.LayoutParams(ViewGroup.LayoutParams.MATCH_PARENT, 0, 1f))
 
         renderChips()
         reload()
+        // 子项不可聚焦后，必须显式把焦点交给网格
+        grid.postDelayed({ if (!grid.hasFocus()) grid.requestFocus() }, 260)
         return col
     }
 
@@ -159,7 +169,9 @@ class LibraryScreen(
             val cell = (convertView as? LinearLayout) ?: LinearLayout(host).apply {
                 orientation = LinearLayout.VERTICAL
                 setPadding(dp(5), dp(4), dp(5), dp(4))
-                isFocusable = true
+                // 与详情页选集网格统一：子项不抢焦点，由 GridView 持焦 + 双环 selector
+                isFocusable = false
+                isFocusableInTouchMode = false
                 addView(ImageView(host).apply {
                     layoutParams = LinearLayout.LayoutParams(dp(146), dp(204))
                     scaleType = ImageView.ScaleType.CENTER_CROP
@@ -167,6 +179,7 @@ class LibraryScreen(
                 })
                 addView(TextView(host).apply {
                     setTextSize(Theme.CAPTION); setTextColor(ink); maxLines = 1
+                    ellipsize = android.text.TextUtils.TruncateAt.END
                     setPadding(dp(2), dp(5), 0, 0)
                 })
                 addView(TextView(host).apply {
@@ -186,9 +199,7 @@ class LibraryScreen(
                 }
             }
             val item = e.toItem()
-            cell.setOnClickListener { onOpenTitle(e.title) }
             PosterActions.attach(host, cell, item, store) { renderChips(); reload() }
-            cell.setOnFocusChangeListener { v, f -> v.background = ring(if (f) accent else Color.TRANSPARENT) }
             return cell
         }
     }

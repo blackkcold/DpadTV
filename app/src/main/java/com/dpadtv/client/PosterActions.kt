@@ -26,7 +26,7 @@ object PosterActions {
     }
 
     private fun show(host: Activity, item: MovieItem, store: LibraryStore, onChange: () -> Unit) {
-        val cur = store.stateOf(item.title)
+        val cur = store.stateOf(item)
         val actions = LibState.entries.toMutableList()
         val labels = actions.map { if (it == cur) "${it.label}  ✓" else it.label }.toMutableList()
         if (cur != null) labels.add("从片单移除")
@@ -39,7 +39,7 @@ object PosterActions {
                 val result = if (picked != null) {
                     store.toggle(item, picked)
                 } else {
-                    store.remove(item.title)
+                    store.remove(item)
                     null
                 }
                 Toast.makeText(
@@ -55,10 +55,10 @@ object PosterActions {
     }
 
     /** 给任意 TextView/容器挂一个"当前状态"角标（可选） */
-    fun badgeFor(store: LibraryStore, title: String): String? = store.stateOf(title)?.label
+    fun badgeFor(store: LibraryStore, item: MovieItem): String? = store.stateOf(item)?.label
 
     fun stateLine(store: LibraryStore, item: MovieItem, tv: TextView) {
-        val s = store.stateOf(item.title)
+        val s = store.stateOf(item)
         tv.text = s?.label ?: ""
         tv.visibility = if (s == null) View.GONE else View.VISIBLE
     }

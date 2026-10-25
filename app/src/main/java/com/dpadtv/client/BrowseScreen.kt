@@ -33,9 +33,8 @@ class BrowseScreen(
     private val repo: CollectionRepo,
     private val store: LibraryStore,
     private val shelf: Shelf,
-    private val initial: List<MovieItem> = emptyList(),
     private val onBack: () -> Unit = {},
-    private val onOpenTitle: (String) -> Unit,
+    private val onOpenTitle: (MovieItem) -> Unit,
 ) {
 
     // getter，不是快照：换主题后已经建好的界面也要立刻跟着变
@@ -59,6 +58,9 @@ class BrowseScreen(
     private val items = ArrayList<MovieItem>()
     private var loading = false
     private var done = false
+    /** 请求令牌：快切筛选时，先发的慢响应回来不许覆盖后发的结果 */
+    private var reqSeq = 0
+    private var reqLive = 0
 
     private lateinit var grid: GridView
     private lateinit var adapter: BaseAdapter
@@ -88,6 +90,13 @@ class BrowseScreen(
         status = TextView(host).apply {
             text = "  · 加载中"
             setTextSize(Theme.CAPTION); setTextColor(muted)
+            setPadding(dp(10), dp(4), dp(10), dp(4))
+            // 失败态才允许聚焦：电视上「按 OK 重试」必须是一个能到达的焦点
+            isFocusable = false
+            isFocusableInTouchMode = false
+            setOnFocusChangeListener { v, f ->
+                v.background = if (f) Theme.focusRing(host, Theme.RADIUS) else null
+            }
         }
         head.addView(status)
         head.addView(View(host), LinearLayout.LayoutParams(0, 1, 1f))
@@ -133,6 +142,11 @@ class BrowseScreen(
             horizontalSpacing = dp(12)
             verticalSpacing = dp(10)
             setPadding(0, dp(10), 0, 0)
+            isFocusable = true
+            // 网格本身要在触摸模式下也能拿焦点：子项已不可聚焦，否则进页后焦点会落到「返回首页」上
+            isFocusableInTouchMode = true
+            // 子项不再聚焦：焦点落在列表上，由 selector 画双环（和详情页选集同一套）
+            setSelector(android.graphics.drawable.InsetDrawable(Theme.focusRing(host, Theme.RADIUS), dp(2)))
             this.adapter = this@BrowseScreen.adapter
             setOnScrollListener(object : android.widget.AbsListView.OnScrollListener {
                 override fun onScrollStateChanged(view: android.widget.AbsListView?, state: Int) {}
@@ -141,16 +155,18 @@ class BrowseScreen(
                 }
             })
         }
+        grid.setOnItemClickListener { _, _, pos, _ ->
+            items.getOrNull(pos)?.let { onOpenTitle(it) }
+        }
         col.addView(grid, LinearLayout.LayoutParams(ViewGroup.LayoutParams.MATCH_PARENT, 0, 1f))
 
         renderChips()
-        if (initial.isNotEmpty()) {
-            items.addAll(initial)
-            adapter.notifyDataSetChanged()
-            status.text = "  · 共 ${items.size} 部 · ${DoubanUrls.label(currentQuery(0))}"
-        } else {
-            reload()
-        }
+        // 子项不再可聚焦：进页就得把焦点交给网格，否则整页没有焦点（遥控器直接失灵）
+        grid.postDelayed({ if (!grid.hasFocus()) grid.requestFocus() }, 260)
+        // 「查看更多」不再把首页合并行塞进来当第一页：那一行的 Query 和本页 base 不是同一个
+        // （4 个榜合并 vs 电影+9分+），续页从 start=18 接会让 9 分+ 的前 18 条永远消失。
+        // 直接按 base 取第一页，本地索引命中时同样是秒开。
+        reload()
         return col
     }
 
@@ -228,7 +244,7 @@ class BrowseScreen(
                 renderChips()
                 reload()
                 // 重建后把焦点还给刚点的那个值，遥控器不用重新找
-                box.post { box.findViewWithTag<View>(v)?.requestFocus() }
+                box.post { box.findViewWithTag<View>("${spec.name}:$v")?.requestFocus() }
             })
         }
     }
@@ -254,8 +270,9 @@ class BrowseScreen(
                 else -> sort.label == v
             }
             row.addView(TextView(host).apply {
-                text = v
-                tag = v
+                text = if (name == "年份" && v != "全部" && !repo.localYearKnown(v)) "$v · 联网" else v
+                // 三个维度都有「全部」：tag 必须带维度前缀，否则焦点会跳回年份那一行
+                tag = "$name:$v"
                 setTextSize(Theme.LABEL)
                 setTextColor(if (on) Theme.INK else Theme.MUTED)
                 isFocusable = true
@@ -294,26 +311,44 @@ class BrowseScreen(
         start = start,
     )
 
+    /** 状态行：retry=true 时变成可聚焦的「重试」入口（电视上没别的点法） */
+    private fun setStatus(text0: String, retry: Boolean = false) {
+        status.text = text0
+        status.isFocusable = retry
+        status.isFocusableInTouchMode = false
+        status.setTextColor(if (retry) Theme.ACCENT else muted)
+        status.setOnClickListener(if (retry) View.OnClickListener { reload() } else null)
+    }
+
+    private fun failureText(): String = when (repo.lastFailure) {
+        FetchFailure.RATE_LIMITED -> "豆瓣暂时不给数据（按 OK 重试）"
+        FetchFailure.OFFLINE -> "网络不通，本地索引也没有这一块（按 OK 重试）"
+        FetchFailure.UPSTREAM -> "取不到（按 OK 重试）"
+        FetchFailure.NONE -> "这个组合本地没有（按 OK 联网取）"
+    }
+
+    /**
+     * chip 切换：与 [reload] 同一套体验 —— 不清空、走 3dp 进度条、失败可重试。
+     * 以前这里 `items.clear()` + 「加载中」文字 = 一秒白屏（审计 P1-5），
+     * 文案还停在已经删掉的「侧车」。
+     */
     private fun loadRef(ref: CollectionRef) {
+        val my = ++reqSeq
+        reqLive = my
         loading = true
         done = true
-        items.clear()
-        adapter.notifyDataSetChanged()
-        status.text = "  · 加载中"
+        setStatus("  · 正在取 ${ref.label}")
+        progressBar?.visibility = View.VISIBLE
         scope.launch {
-            val got = repo.fetch(ref)
+            val got = repo.fetch(ref, allowNetwork = true)
+            if (my != reqLive) return@launch
+            progressBar?.visibility = View.GONE
             loading = false
+            items.clear()
             items.addAll(got)
             adapter.notifyDataSetChanged()
-            status.text = if (got.isEmpty()) {
-                // 只在「真的是限流」时才提豆瓣；侧车没准备好是配置问题，不能算到豆瓣头上
-                when (repo.lastFailure) {
-                    FetchFailure.RATE_LIMITED -> "  · 豆瓣暂时不给数据，稍后重试（已缓存的仍可看）"
-                    FetchFailure.OFFLINE -> "  · 缓存还没准备好，等侧车预热"
-                    FetchFailure.UPSTREAM -> "  · 这个榜暂时取不到"
-                    FetchFailure.NONE -> "  · 这个榜暂时取不到"
-                }
-            } else "  · 共 ${got.size} 部 · ${ref.label}"
+            if (got.isEmpty()) setStatus(failureText(), retry = true)
+            else setStatus("  · 共 ${got.size} 部 · ${ref.label}${sourceHint()}")
         }
     }
 
@@ -324,26 +359,25 @@ class BrowseScreen(
     private fun reload() {
         done = false
         val q = currentQuery(0)
-        status.setOnClickListener(null)
-        status.text = "  · 正在取 ${DoubanUrls.label(q)}"
+        val my = ++reqSeq
+        reqLive = my
+        loading = true
+        setStatus("  · 正在取 ${DoubanUrls.label(q)}")
         progressBar?.visibility = View.VISIBLE
         scope.launch {
-            val page = repo.fetchQuery(q)
+            val page = repo.fetchQuery(q, allowNetwork = true)
+            // 令牌不匹配 = 用户已经切到别的筛选，这次结果作废（否则慢响应会覆盖新结果）
+            if (my != reqLive) return@launch
             progressBar?.visibility = View.GONE
+            loading = false
             if (page.isNotEmpty()) {
                 items.clear()
                 items.addAll(page)
                 adapter.notifyDataSetChanged()
-                status.text = "  · 共 ${items.size} 部 · ${DoubanUrls.label(q)}${sourceHint()}"
+                setStatus("  · 共 ${items.size} 部${sourceHint()}")
             } else {
                 done = true
-                status.text = "  · " + when (repo.lastFailure) {
-                    FetchFailure.RATE_LIMITED -> "豆瓣暂时不给数据（按 OK 重试）"
-                    FetchFailure.OFFLINE -> "本地索引缺这一块（按 OK 联网取）"
-                    FetchFailure.UPSTREAM -> "取不到（按 OK 重试）"
-                    FetchFailure.NONE -> "这个组合本地没有（按 OK 联网取）"
-                }
-                status.setOnClickListener { reload() }
+                setStatus(failureText(), retry = true)
             }
         }
     }
@@ -358,21 +392,19 @@ class BrowseScreen(
     private fun loadMore() {
         if (loading || done) return
         loading = true
+        val my = reqLive
         val q = currentQuery(items.size)
         scope.launch {
-            val page = repo.fetchQuery(q)
+            val page = repo.fetchQuery(q, allowNetwork = true)
+            if (my != reqLive) return@launch
             loading = false
             if (page.isEmpty()) {
                 done = true
-                status.text = when (repo.lastFailure) {
-                    FetchFailure.RATE_LIMITED -> "  · 豆瓣暂时不给数据，稍后重试（已缓存的仍可看）"
-                    FetchFailure.OFFLINE -> "  · 缓存还没准备好，等侧车预热"
-                    FetchFailure.UPSTREAM -> "  · 这个组合暂时取不到"
-                    FetchFailure.NONE -> if (items.isEmpty()) "  · 这个组合没有结果，换个筛选试试" else "  · 共 ${items.size} 部"
-                }
+                if (items.isNotEmpty()) setStatus("  · 共 ${items.size} 部（到底了）")
+                else setStatus(failureText(), retry = true)
             } else {
                 items.addAll(page.filter { p -> items.none { it.title == p.title } })
-                status.text = "  · 共 ${items.size} 部 · ${DoubanUrls.label(q)}"
+                setStatus("  · 共 ${items.size} 部")
                 adapter.notifyDataSetChanged()
             }
         }
@@ -413,7 +445,9 @@ class BrowseScreen(
             val cell = (convertView as? LinearLayout) ?: LinearLayout(host).apply {
                 orientation = LinearLayout.VERTICAL
                 setPadding(dp(5), dp(4), dp(5), dp(4))
-                isFocusable = true
+                // 与详情页选集网格统一：子项不抢焦点，由 GridView 持焦 + 双环 selector
+                isFocusable = false
+                isFocusableInTouchMode = false
                 addView(ImageView(host).apply {
                     layoutParams = LinearLayout.LayoutParams(dp(146), dp(204))
                     scaleType = ImageView.ScaleType.CENTER_CROP
@@ -421,6 +455,7 @@ class BrowseScreen(
                 })
                 addView(TextView(host).apply {
                     setTextSize(Theme.CAPTION); setTextColor(ink); maxLines = 1
+                    ellipsize = android.text.TextUtils.TruncateAt.END
                     setPadding(dp(2), dp(5), 0, 0)
                 })
             }
@@ -435,11 +470,7 @@ class BrowseScreen(
                     if (img.tag == item.cover && bmp != null) img.setImageBitmap(bmp)
                 }
             }
-            cell.setOnClickListener { onOpenTitle(item.title) }
             PosterActions.attach(host, cell, item, store)
-            cell.setOnFocusChangeListener { v, f ->
-                v.background = ring(if (f) accent else Color.TRANSPARENT)
-            }
             return cell
         }
     }

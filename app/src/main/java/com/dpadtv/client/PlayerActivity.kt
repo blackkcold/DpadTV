@@ -375,10 +375,13 @@ class PlayerActivity : Activity() {
                     }
 
                     override fun onPlayerError(error: PlaybackException) {
+                        // 「换源」只在真的带着备选地址进来时才存在（整季播放传的是集数，不是源）。
+                        // 这里给一个用户按得到的事实说明，别让他对着「按返回键换源」按不出东西。
+                        val hint = if (urls.size > 1) "按返回键回上一页换一集/换源" else "按返回键退出后重新搜索"
                         val msg = if (error.errorCodeName.contains("DECODER", true)) {
-                            "解码失败：这个片源可能是 H.265 / 不支持的编码 · 按返回键换源"
+                            "解码失败：这个片源可能是 H.265 / 不支持的编码 · $hint"
                         } else {
-                            "播放失败：${error.errorCodeName} · 按返回键换源"
+                            "播放失败：${error.errorCodeName} · $hint"
                         }
                         hasError = true
                         baseText = msg
@@ -546,7 +549,7 @@ class PlayerActivity : Activity() {
         }
         background = normal
         isFocusable = true
-        isFocusableInTouchMode = true
+        isFocusableInTouchMode = false
         setOnFocusChangeListener { v, has -> v.background = if (has) focused else normal }
         setOnClickListener { onClick() }
         val lp = LinearLayout.LayoutParams(
@@ -635,6 +638,16 @@ class PlayerActivity : Activity() {
 
     /* ------------------------------------------------------------ 进度与退出 */
 
+    /**
+     * 快进/快退步长：跟着「设置 → 播放 → 快进/快退步长」走。
+     * 旧版硬编码 10s/15s，设置项写了却从不生效（审计 P1-7）；长按 = 1.5 倍步长。
+     */
+    private fun seekStep(forward: Boolean, repeat: Boolean): Long {
+        val base = prefs.seekStepSeconds.coerceIn(5, 120) * 1000L
+        val delta = if (repeat) (base * 1.5).toLong() else base
+        return if (forward) delta else -delta
+    }
+
     private fun seekBy(deltaMs: Long) {
         val p = player ?: return
         val dur = p.duration.coerceAtLeast(0)
@@ -670,6 +683,8 @@ class PlayerActivity : Activity() {
                         durationMs = p.duration.coerceAtLeast(0L),
                         updatedAt = System.currentTimeMillis(),
                         cover = coverUrl,
+                        urls = urls.toList(),
+                        index = currentIndex,
                     ),
                 )
             }
@@ -740,11 +755,11 @@ class PlayerActivity : Activity() {
                 true
             }
             KeyEvent.KEYCODE_DPAD_RIGHT -> {
-                seekBy(if (event.repeatCount > 0) 15_000L else 10_000L)
+                seekBy(seekStep(forward = true, repeat = event.repeatCount > 0))
                 true
             }
             KeyEvent.KEYCODE_DPAD_LEFT -> {
-                seekBy(if (event.repeatCount > 0) -15_000L else -10_000L)
+                seekBy(seekStep(forward = false, repeat = event.repeatCount > 0))
                 true
             }
             KeyEvent.KEYCODE_MEDIA_FAST_FORWARD -> {

@@ -222,6 +222,16 @@ object Theme {
     fun scrimTop(solid: Int = SCRIM_SOLID): GradientDrawable =
         GradientDrawable(GradientDrawable.Orientation.TOP_BOTTOM, intArrayOf(solid, 0x00000000))
 
+    /**
+     * 文字块幕布：**顶部就带 70% 黑**。
+     * 旧版用 scrimBottom（顶部全透明），40sp 白字正好压在亮海报的透明段上 —— 实测 1.28:1（审计 P1-14）。
+     */
+    fun scrimText(): GradientDrawable =
+        GradientDrawable(
+            GradientDrawable.Orientation.TOP_BOTTOM,
+            intArrayOf(0xB3000000.toInt(), 0xF2000000.toInt()),
+        )
+
     /** 底部幕布：从透明渐变到页面底，让 hero 没有硬边。 */
     fun scrimBottom(to: Int = BG_DEEP): GradientDrawable =
         GradientDrawable(GradientDrawable.Orientation.TOP_BOTTOM, intArrayOf(0x00000000, to))

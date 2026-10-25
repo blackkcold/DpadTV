@@ -86,8 +86,30 @@ class LocalIndexTest {
     }
 
     @Test
-    fun empty_tag_list_means_whole_index() {
+    fun empty_tag_list_is_rejected() {
+        // 空标签 = 「全部条目」：索引给不出有意义的排序，必须交回网络，
+        // 不能把整个库当成一次命中（旧行为，审计 P2-9 的定时炸弹）
         val got = IndexCore.query(idsByTag, items, emptyList(), null, 0.0, 0, 10)
-        assertEquals(5, got.size)
+        assertTrue(got.isEmpty())
+    }
+
+    @Test
+    fun ordered_query_keeps_curated_order() {
+        val tag = mapOf("Top250" to listOf("3", "1", "4"))
+        val got = IndexCore.ordered(tag, items, "Top250", 0, 2)
+        assertEquals(listOf("寄生虫", "千与千寻"), got.map { it.title })
+        val page2 = IndexCore.ordered(tag, items, "Top250", 2, 5)
+        assertEquals(listOf("唐人街探案"), page2.map { it.title })
+        assertTrue(IndexCore.ordered(tag, items, "不存在", 0, 5).isEmpty())
+        assertTrue(IndexCore.ordered(tag, items, "Top250", 9, 5).isEmpty())
+    }
+
+    @Test
+    fun year_matches_by_year_tag_membership() {
+        // 条目自带 year 为空时，年份标签的成员关系必须仍然生效
+        val yearIds = setOf("2", "3")
+        val got = IndexCore.query(idsByTag, items, listOf("电影"), "2025", 0.0, 0, 10, yearIds)
+        // 唐人街探案自带 year=2025，也在这批里 —— 字段命中与标签命中是「或」的关系
+        assertEquals(listOf("寄生虫", "告白", "唐人街探案"), got.map { it.title })
     }
 }
