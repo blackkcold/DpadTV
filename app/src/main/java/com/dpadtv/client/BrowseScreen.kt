@@ -261,8 +261,13 @@ class BrowseScreen(
             items.addAll(got)
             adapter.notifyDataSetChanged()
             status.text = if (got.isEmpty()) {
-                val wait = repo.blockedSecondsLeft()
-                if (wait > 0) "  · 豆瓣限流，${wait / 60 + 1} 分钟后自动恢复" else "  · 这个榜暂时取不到"
+                // 只在「真的是限流」时才提豆瓣；侧车没准备好是配置问题，不能算到豆瓣头上
+                when (repo.lastFailure) {
+                    FetchFailure.RATE_LIMITED -> "  · 豆瓣暂时不给数据，稍后重试（已缓存的仍可看）"
+                    FetchFailure.OFFLINE -> "  · 缓存还没准备好，等侧车预热"
+                    FetchFailure.UPSTREAM -> "  · 这个榜暂时取不到"
+                    FetchFailure.NONE -> "  · 这个榜暂时取不到"
+                }
             } else "  · 共 ${got.size} 部 · ${ref.label}"
         }
     }
@@ -284,11 +289,11 @@ class BrowseScreen(
             loading = false
             if (page.isEmpty()) {
                 done = true
-                val wait = repo.blockedSecondsLeft()
-                status.text = when {
-                    wait > 0 -> "  · 豆瓣限流，${wait / 60 + 1} 分钟后自动恢复（已缓存的结果仍可看）"
-                    items.isEmpty() -> "  · 这个组合没有结果，换个筛选试试"
-                    else -> "  · 共 ${items.size} 部"
+                status.text = when (repo.lastFailure) {
+                    FetchFailure.RATE_LIMITED -> "  · 豆瓣暂时不给数据，稍后重试（已缓存的仍可看）"
+                    FetchFailure.OFFLINE -> "  · 缓存还没准备好，等侧车预热"
+                    FetchFailure.UPSTREAM -> "  · 这个组合暂时取不到"
+                    FetchFailure.NONE -> if (items.isEmpty()) "  · 这个组合没有结果，换个筛选试试" else "  · 共 ${items.size} 部"
                 }
             } else {
                 items.addAll(page.filter { p -> items.none { it.title == p.title } })

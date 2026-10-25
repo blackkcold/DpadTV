@@ -260,7 +260,7 @@ class ShelvesScreen(
     private fun render(row: Row, merged: List<MovieItem>) {
         row.strip.removeAllViews()
         if (merged.isEmpty()) {
-            row.count.text = "  · 暂时取不到（豆瓣限流，稍后重试）"
+            row.count.text = "  · 暂时取不到（稍后自动重试）"
             row.strip.addView(retryCell(row.shelf, row.strip, row.count))
             return
         }

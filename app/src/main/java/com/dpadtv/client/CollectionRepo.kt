@@ -15,24 +15,29 @@ import java.net.URL
 import java.net.URLEncoder
 import java.security.MessageDigest
 
+/** 一次取数为什么空手：UI 只在这个原因上写文案，不再拿「N 分钟后恢复」骗人 */
+enum class FetchFailure { NONE, RATE_LIMITED, OFFLINE, UPSTREAM }
+
 /**
- * 榜单抓取 + 本地缓存 + **全局限速**。
+ * 榜单抓取 + 本地缓存 + 侧车优先。
  *
- * 直连豆瓣（不走服务端）：一台电视、请求量小；服务端 LibreTV 只透传 type+tag，
- * 拿不到「年份 + 评分区间 + 评分排序」。
+ * 数据链路：
+ *   App → 侧车（路由 :8898，全屋共享缓存 + 预热 + 熔断）→ 豆瓣
+ *   App → 豆瓣 直连只在侧车不可达时兜底，且失败后长退避，不反复撞风控。
  *
- * 限速是必须的：豆瓣按 IP 触发风控，触发后返回
- * `{"msg":"检测到有异常请求从您的IP发出…","r":1}`（HTTP 仍是 200）。
+ * v1 的教训：侧车在 `ALLOW_UPSTREAM=0` 时返回 `{"msg":"offline mode...","r":1}`，
+ * 客户端靠 `body.contains("\"r\":1")` 猜状态 → 把「侧车没开上游」当成「豆瓣限流」，
+ * 于是永远显示「豆瓣限流，N 分钟后自动恢复」。v2 改为**读 X-Cache 头判定**，body 不参与判态。
+ *
  * 三条纪律：
- *   1. 所有请求串行 + 至少间隔 650ms（Mutex 全局互斥）
- *   2. 一旦识别到风控，整体退避 10 分钟，期间只读缓存
- *   3. 每页结果单独缓存 24h，滚动分页不重复打接口
+ *   1. 侧车返回的 200 才当真数据；429 才是限流；503 是配置/上游问题
+ *   2. 只有真限流才设退避（按 Retry-After），offline-miss 不设
+ *   3. 每页结果单独缓存 7 天（与侧车 TTL 对齐），滚动分页不重复打接口
  */
 class CollectionRepo(private val ctx: Context) {
 
     /**
-     * 豆瓣缓存 sidecar（路由上跑）：同一个 URL 全屋共享 24h 缓存 + 单飞 + 全局 2.5s 串行。
-     * 有它以后客户端可以放心并发，不会再被豆瓣按 IP 风控。
+     * 豆瓣缓存 sidecar（路由上跑）：同一个 URL 全屋共享缓存 + 单飞 + 全局串行 + 每日预热。
      * 地址由服务器地址推导：http://192.168.0.14:8899 → http://192.168.0.14:8898
      */
     private val sidecar: String? = runCatching {
@@ -46,6 +51,11 @@ class CollectionRepo(private val ctx: Context) {
     private val gate = Mutex()
     private var lastRequestAt = 0L
     private var blockedUntil = 0L
+
+    /** 最近一次取数结果。UI 只在「列表为空」时读它决定文案。 */
+    @Volatile
+    var lastFailure: FetchFailure = FetchFailure.NONE
+        private set
 
     fun blockedSecondsLeft(): Long {
         val left = blockedUntil - System.currentTimeMillis()
@@ -82,48 +92,80 @@ class CollectionRepo(private val ctx: Context) {
         cached("q_" + md5(url)) { request(url)?.let { parseNewSearch(it) } ?: emptyList() }
     }
 
-    // ---------- 限速 + 缓存 ----------
+    // ---------- 取数：侧车优先，直连兜底 ----------
+
+    /** https://movie.douban.com/xxx → Pair("movie.douban.com", "/xxx") */
+    private fun parseDouban(url: String): Pair<String, String>? = when {
+        url.startsWith("https://movie.douban.com/") -> "movie.douban.com" to url.removePrefix("https://movie.douban.com")
+        url.startsWith("https://www.douban.com/") -> "www.douban.com" to url.removePrefix("https://www.douban.com")
+        else -> null
+    }
 
     private suspend fun request(url: String): String? = gate.withLock {
-        // 1) 先走 sidecar（不受直连"风控退避"影响）（局域网，毫秒级；缓存命中时上游 0 请求）
-        if (sidecar != null && url.startsWith("https://movie.douban.com/")) {
-            val path = url.removePrefix("https://movie.douban.com")
-            val body = runCatching {
-                get(sidecar + "/douban?path=" + java.net.URLEncoder.encode(path, "UTF-8"))
+        val douban = parseDouban(url)
+
+        // 1) 侧车优先：命中时上游 0 请求，局域网毫秒级
+        if (douban != null && sidecar != null) {
+            val (host, path) = douban
+            val resp = runCatching {
+                getRaw(sidecar + "/douban?path=" + enc(path) + "&host=" + host)
             }.getOrNull()
-            when {
-                // 拿到了真数据
-                body != null && !body.contains("检测到有异常请求") && !body.contains("\"r\":1") -> {
-                    Log.i("DpadTVDouban", "sidecar ${body.length}B ${path.take(60)}")
-                    return@withLock body
+
+            if (resp != null) {
+                val verdict = resp.cache.orEmpty()
+                val usable = resp.code == 200 && resp.body.isNotBlank() &&
+                    verdict != "offline-miss" && verdict != "rate-limited" && verdict != "upstream-error"
+                if (usable) {
+                    lastFailure = FetchFailure.NONE
+                    Log.i("DpadTVDouban", "sidecar ${verdict.ifEmpty { "v1" }} ${resp.body.length}B ${path.take(52)}")
+                    return@withLock resp.body
                 }
-                // 侧车在，但它说上游被限流：**不要再回退直连**，否则等于再补一刀
-                body != null -> {
-                    blockedUntil = System.currentTimeMillis() + 10 * 60_000
-                    Log.w("DpadTVDouban", "sidecar 报限流，本次不走直连：${path.take(60)}")
-                    return@withLock null
+                when (verdict) {
+                    "rate-limited" -> {
+                        val retry = resp.retryAfter.takeIf { it > 0 } ?: 600L
+                        blockedUntil = System.currentTimeMillis() + retry * 1000
+                        lastFailure = FetchFailure.RATE_LIMITED
+                        Log.w("DpadTVDouban", "侧车限流，退避 ${retry}s：${path.take(52)}")
+                        return@withLock null
+                    }
+                    "offline-miss" -> {
+                        // 侧车没开上游（配置态），不是限流 —— 不设退避，也不直连补刀
+                        lastFailure = FetchFailure.OFFLINE
+                        Log.w("DpadTVDouban", "侧车 offline-miss（ALLOW_UPSTREAM=0）：${path.take(52)}")
+                        return@withLock null
+                    }
+                    else -> {
+                        lastFailure = FetchFailure.UPSTREAM
+                        Log.w("DpadTVDouban", "侧车 upstream-error(${resp.code})：${path.take(52)}")
+                        return@withLock null
+                    }
                 }
-                // 侧车连不上（没部署/局域网不通）才回退直连
-                else -> Log.w("DpadTVDouban", "sidecar 不可达，回退直连：${path.take(60)}")
             }
+            Log.w("DpadTVDouban", "sidecar 不可达，直连一次：${path.take(52)}")
         }
 
-        // 2) 回退：直连豆瓣（限速 2.5s 是硬要求）
+        // 2) 直连兜底：只在侧车不可达 / 没有侧车时走；失败即长退避，不反复撞风控
         if (System.currentTimeMillis() < blockedUntil) return@withLock null
         val gap = 2500 - (System.currentTimeMillis() - lastRequestAt)
         if (gap > 0) delay(gap)
         lastRequestAt = System.currentTimeMillis()
-        val body = runCatching { get(url) }
+        val resp = runCatching { getRaw(url) }
             .onFailure { Log.w("DpadTVDouban", "GET 失败 ${url.take(90)} → ${it.javaClass.simpleName}: ${it.message}") }
-            .getOrNull() ?: return@withLock null
-        if (body.contains("检测到有异常请求") || body.contains("\"r\":1")) {
-            blockedUntil = System.currentTimeMillis() + 10 * 60_000
-            Log.w("DpadTVDouban", "触发风控，退避 10 分钟：${body.take(80)}")
-            null
-        } else {
-            Log.i("DpadTVDouban", "OK ${body.length}B ${url.substringAfter("?").take(70)}")
-            body
+            .getOrNull()
+        if (resp == null) {
+            lastFailure = FetchFailure.UPSTREAM
+            return@withLock null
         }
+        if (resp.body.contains("检测到有异常请求") || resp.body.contains("\"r\":1")) {
+            // 直连被风控：一小时别再试，等下次侧车恢复
+            blockedUntil = System.currentTimeMillis() + 60 * 60_000
+            lastFailure = FetchFailure.RATE_LIMITED
+            Log.w("DpadTVDouban", "直连触发风控，退避 60 分钟：${resp.body.take(80)}")
+            return@withLock null
+        }
+        lastFailure = FetchFailure.NONE
+        Log.i("DpadTVDouban", "direct OK ${resp.body.length}B ${url.substringAfter("?").take(70)}")
+        resp.body
     }
 
     private suspend fun cached(key: String, block: suspend () -> List<MovieItem>): List<MovieItem> {
@@ -133,7 +175,7 @@ class CollectionRepo(private val ctx: Context) {
             writeCache(key, items)
             return items
         }
-        // 拉不到（限流/断网）：用过期的旧缓存兜底，总比空屏好
+        // 拉不到（限流/断网/缓存未预热）：用过期的旧缓存兜底，总比空屏好
         return readCache(key, ttlMs = Long.MAX_VALUE).orEmpty()
     }
 
@@ -141,7 +183,14 @@ class CollectionRepo(private val ctx: Context) {
 
     private fun enc(s: String): String = URLEncoder.encode(s, "UTF-8")
 
-    private fun get(url: String): String {
+    private data class Resp(
+        val code: Int,
+        val body: String,
+        val cache: String?,
+        val retryAfter: Long,
+    )
+
+    private fun getRaw(url: String): Resp {
         val conn = (URL(url).openConnection() as HttpURLConnection).apply {
             connectTimeout = 8000
             readTimeout = 12000
@@ -150,7 +199,15 @@ class CollectionRepo(private val ctx: Context) {
             setRequestProperty("Accept", "application/json, text/html;q=0.9,*/*;q=0.8")
         }
         return try {
-            conn.inputStream.bufferedReader(Charsets.UTF_8).use { it.readText() }
+            val code = conn.responseCode
+            val stream = if (code in 200..299) conn.inputStream else conn.errorStream
+            val body = stream?.bufferedReader(Charsets.UTF_8)?.use { it.readText() }.orEmpty()
+            Resp(
+                code = code,
+                body = body,
+                cache = conn.getHeaderField("X-Cache"),
+                retryAfter = conn.getHeaderField("Retry-After")?.toLongOrNull() ?: 0L,
+            )
         } finally {
             conn.disconnect()
         }
@@ -248,6 +305,7 @@ class CollectionRepo(private val ctx: Context) {
         MessageDigest.getInstance("MD5").digest(s.toByteArray()).joinToString("") { "%02x".format(it) }.take(16)
 
     companion object {
-        const val TTL = 24 * 3600_000L
+        /** 与侧车 TTL 对齐：榜单按天变化，7 天内的数据比一次风控值钱 */
+        const val TTL = 7 * 24 * 3600_000L
     }
 }
