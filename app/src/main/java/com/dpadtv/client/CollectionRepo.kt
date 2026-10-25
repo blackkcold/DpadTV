@@ -91,11 +91,21 @@ class CollectionRepo(private val ctx: Context) {
             val body = runCatching {
                 get(sidecar + "/douban?path=" + java.net.URLEncoder.encode(path, "UTF-8"))
             }.getOrNull()
-            if (body != null && !body.contains("检测到有异常请求") && !body.contains("\"r\":1")) {
-                Log.i("DpadTVDouban", "sidecar ${body.length}B ${path.take(60)}")
-                return@withLock body
+            when {
+                // 拿到了真数据
+                body != null && !body.contains("检测到有异常请求") && !body.contains("\"r\":1") -> {
+                    Log.i("DpadTVDouban", "sidecar ${body.length}B ${path.take(60)}")
+                    return@withLock body
+                }
+                // 侧车在，但它说上游被限流：**不要再回退直连**，否则等于再补一刀
+                body != null -> {
+                    blockedUntil = System.currentTimeMillis() + 10 * 60_000
+                    Log.w("DpadTVDouban", "sidecar 报限流，本次不走直连：${path.take(60)}")
+                    return@withLock null
+                }
+                // 侧车连不上（没部署/局域网不通）才回退直连
+                else -> Log.w("DpadTVDouban", "sidecar 不可达，回退直连：${path.take(60)}")
             }
-            Log.w("DpadTVDouban", "sidecar 不可用，回退直连：${path.take(60)}")
         }
 
         // 2) 回退：直连豆瓣（限速 2.5s 是硬要求）

@@ -22,6 +22,12 @@ const UA = 'Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 (KHTML,
 
 fs.mkdirSync(DIR, { recursive: true });
 
+const PENDING = path.join(DIR, 'pending.json');
+const loadPending = () => { try { return JSON.parse(fs.readFileSync(PENDING, 'utf8')); } catch { return []; } };
+const savePending = (list) => { try { fs.writeFileSync(PENDING, JSON.stringify(list.slice(0, 40))); } catch {} };
+const addPending = (p) => { const l = loadPending(); if (!l.includes(p)) { l.push(p); savePending(l); console.log('pending +', p); } };
+const dropPending = (p) => savePending(loadPending().filter((x) => x !== p));
+
 const key = (p) => crypto.createHash('md5').update(p).digest('hex');
 const inflight = new Map();
 let lastFetch = 0;
@@ -119,6 +125,7 @@ const server = http.createServer(async (req, res) => {
       return send(res, 200, stale.body);
     }
     console.error('upstream fail', p, e.message);
+    if (e.message === 'RATE_LIMITED') addPending(p);
     return send(res, 200, JSON.stringify({ msg: 'upstream failed: ' + e.message, r: 1 }));
   }
 });
@@ -129,3 +136,22 @@ function send(res, code, body) {
 }
 
 server.listen(PORT, '0.0.0.0', () => console.log(`douban sidecar on :${PORT}, cache=${DIR}, ttl=${TTL / 1000}s, gap=${GAP}ms`));
+
+/**
+ * 补课循环：限流期间没抓到的 URL 记在 pending.json，每 10 分钟试一次（一次只试一个），
+ * 抓到就写缓存并出队。这样客户端不需要为"当时被限流"负责，下次打开自然就有。
+ */
+setInterval(async () => {
+  const list = loadPending();
+  if (!list.length) return;
+  const p = list[0];
+  if (readCache(key(p))) { dropPending(p); return; }
+  try {
+    const body = await fetchUpstream(p);
+    writeCache(key(p), body);
+    dropPending(p);
+    console.log('pending done', p);
+  } catch (e) {
+    console.log('pending retry failed', e.message);
+  }
+}, 10 * 60 * 1000);
