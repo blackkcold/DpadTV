@@ -28,10 +28,10 @@ class LibraryScreen(
     private val onBack: () -> Unit,
 ) {
 
-    private val accent = 0xFF38BDF8.toInt()
-    private val ink = 0xFFE5E7EB.toInt()
-    private val muted = 0xFF94A3B8.toInt()
-    private val panel = 0xFF1F2937.toInt()
+    private val accent = Theme.ACCENT
+    private val ink = Theme.INK
+    private val muted = Theme.MUTED
+    private val panel = Theme.PANEL
 
     private var filter: LibState? = null
     private val items = ArrayList<LibEntry>()
@@ -54,13 +54,13 @@ class LibraryScreen(
             orientation = LinearLayout.HORIZONTAL
             gravity = Gravity.CENTER_VERTICAL
         }
-        head.addView(TextView(host).apply { text = "我的片单"; setTextSize(20f); setTextColor(ink) })
-        status = TextView(host).apply { setTextSize(12.5f); setTextColor(muted) }
+        head.addView(TextView(host).apply { text = "我的片单"; setTextSize(Theme.DISPLAY); setTextColor(ink) })
+        status = TextView(host).apply { setTextSize(Theme.CAPTION); setTextColor(muted) }
         head.addView(status)
         head.addView(View(host), LinearLayout.LayoutParams(0, 1, 1f))
         head.addView(TextView(host).apply {
             text = "‹ 返回首页"
-            setTextSize(13.5f)
+            setTextSize(Theme.BODY)
             setTextColor(ink)
             isFocusable = true
             isFocusableInTouchMode = false
@@ -70,7 +70,7 @@ class LibraryScreen(
         })
         head.addView(TextView(host).apply {
             text = "长按 OK 改状态"
-            setTextSize(12f)
+            setTextSize(Theme.CAPTION)
             setTextColor(muted)
         })
         col.addView(head)
@@ -86,7 +86,7 @@ class LibraryScreen(
 
         empty = TextView(host).apply {
             text = "片单还是空的。\n在任何海报上长按 OK → 选「收藏 / 想看 / 在看 / 看过 / 弃剧」，下次就在这里。"
-            setTextSize(13f)
+            setTextSize(Theme.CAPTION)
             setTextColor(muted)
             gravity = Gravity.CENTER
             setPadding(0, dp(60), 0, 0)
@@ -125,7 +125,7 @@ class LibraryScreen(
 
     private fun chip(label: String, on: Boolean, click: () -> Unit): View = TextView(host).apply {
         text = label
-        setTextSize(13f)
+        setTextSize(Theme.CAPTION)
         setTextColor(if (on) Color.parseColor("#04121B") else ink)
         isFocusable = true
         isFocusableInTouchMode = false
@@ -165,11 +165,11 @@ class LibraryScreen(
                     setBackgroundColor(Color.parseColor("#1a2233"))
                 })
                 addView(TextView(host).apply {
-                    setTextSize(12.5f); setTextColor(ink); maxLines = 1
+                    setTextSize(Theme.CAPTION); setTextColor(ink); maxLines = 1
                     setPadding(dp(2), dp(5), 0, 0)
                 })
                 addView(TextView(host).apply {
-                    setTextSize(10.5f); setTextColor(accent); maxLines = 1
+                    setTextSize(Theme.MICRO); setTextColor(accent); maxLines = 1
                     setPadding(dp(2), dp(1), 0, 0)
                 })
             }

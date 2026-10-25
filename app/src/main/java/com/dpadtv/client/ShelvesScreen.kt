@@ -37,10 +37,10 @@ class ShelvesScreen(
 ) {
 
     private val scope = CoroutineScope(SupervisorJob() + Dispatchers.Main)
-    private val accent = 0xFF38BDF8.toInt()
-    private val panel = 0xFF1F2937.toInt()
-    private val ink = 0xFFE5E7EB.toInt()
-    private val muted = 0xFF94A3B8.toInt()
+    private val accent = Theme.ACCENT
+    private val panel = Theme.PANEL
+    private val ink = Theme.INK
+    private val muted = Theme.MUTED
 
     private fun dp(v: Int) = (v * host.resources.displayMetrics.density).toInt()
 
@@ -102,7 +102,7 @@ class ShelvesScreen(
 
         val box = LinearLayout(host).apply {
             orientation = LinearLayout.VERTICAL
-            setPadding(0, dp(2), 0, dp(14))
+            setPadding(0, dp(Theme.GAP_XS), 0, dp(14))
         }
         val head = LinearLayout(host).apply {
             orientation = LinearLayout.HORIZONTAL
@@ -111,12 +111,12 @@ class ShelvesScreen(
         }
         head.addView(TextView(host).apply {
             text = "为你推荐"
-            setTextSize(18f)
+            setTextSize(Theme.TITLE)
             setTextColor(ink)
         })
         head.addView(TextView(host).apply {
             text = "  · 按你的片单和播放记录挑的"
-            setTextSize(12.5f)
+            setTextSize(Theme.CAPTION)
             setTextColor(muted)
         })
         box.addView(head)
@@ -160,14 +160,14 @@ class ShelvesScreen(
         }
         head.addView(TextView(host).apply {
             text = "我的片单"
-            setTextSize(18f)
+            setTextSize(Theme.TITLE)
             setTextColor(ink)
         })
         val counts = store.counts().filterValues { it > 0 }
             .entries.joinToString(" · ") { "${it.key.label} ${it.value}" }
         head.addView(TextView(host).apply {
             text = if (counts.isEmpty()) "  · 长按海报加入" else "  · $counts"
-            setTextSize(12.5f)
+            setTextSize(Theme.CAPTION)
             setTextColor(muted)
         })
         head.addView(View(host), LinearLayout.LayoutParams(0, 1, 1f))
@@ -187,12 +187,12 @@ class ShelvesScreen(
             orientation = LinearLayout.HORIZONTAL
             setPadding(0, dp(2), 0, 0)
         }
-        entries.forEach { e -> strip.addView(posterCell(e.toItem(), dominantBadge = "")) }
+        entries.forEach { e -> strip.addView(posterCell(e.toItem(), dominantBadge = "", stateBadge = true)) }
         if (entries.size < 4) {
             strip.addView(TextView(host).apply {
                 text = "长按\n海报\n加入"
                 gravity = Gravity.CENTER
-                setTextSize(12f)
+                setTextSize(Theme.CAPTION)
                 setTextColor(muted)
                 background = rounded(panel, dp(8))
                 layoutParams = LinearLayout.LayoutParams(dp(72), dp(204)).apply { leftMargin = dp(8) }
@@ -221,13 +221,13 @@ class ShelvesScreen(
         })
         row.addView(TextView(host).apply {
             text = "DpadTV Pro"
-            setTextSize(21f)
+            setTextSize(Theme.BRAND)
             setTextColor(ink)
             setPadding(dp(10), 0, dp(14), 0)
         })
         row.addView(TextView(host).apply {
             text = "今晚看点什么"
-            setTextSize(12.5f)
+            setTextSize(Theme.CAPTION)
             setTextColor(muted)
         })
         // 顶部导航：M1 换掉旧首页时把入口一起弄丢了，电视上没有地址栏，必须有常驻入口
@@ -240,7 +240,7 @@ class ShelvesScreen(
 
     private fun navPill(label: String, action: () -> Unit): View = TextView(host).apply {
         text = label
-        setTextSize(13.5f)
+        setTextSize(Theme.BODY)
         setTextColor(ink)
         isFocusable = true
         // 触摸模式下点一下就直接触发，不要"先聚焦再点一次"
@@ -283,12 +283,12 @@ class ShelvesScreen(
         }
         head.addView(TextView(host).apply {
             text = shelf.title
-            setTextSize(18f)
+            setTextSize(Theme.TITLE)
             setTextColor(ink)
         })
         val countLabel = TextView(host).apply {
             text = "  · 加载中"
-            setTextSize(12.5f)
+            setTextSize(Theme.CAPTION)
             setTextColor(muted)
         }
         head.addView(countLabel)
@@ -323,7 +323,16 @@ class ShelvesScreen(
         setOnFocusChangeListener { v, focused -> v.background = ring(if (focused) accent else Color.TRANSPARENT) }
     }
 
-    private fun posterCell(item: MovieItem, dominantBadge: String = ""): View {
+    /** 状态色：和「来源角标」区分开，否则用户分不清"收藏"是状态还是榜单 */
+    private fun stateColor(label: String): Int = when (label) {
+        "收藏" -> accent
+        "在看" -> 0xFF34D399.toInt()
+        "看过" -> 0xFFCBD5E1.toInt()
+        "想看" -> 0xFFFBBF24.toInt()
+        else -> 0xFFF87171.toInt()
+    }
+
+    private fun posterCell(item: MovieItem, dominantBadge: String = "", stateBadge: Boolean = false): View {
         val cell = LinearLayout(host).apply {
             orientation = LinearLayout.VERTICAL
             setPadding(dp(5), dp(4), dp(5), dp(4))
@@ -340,13 +349,20 @@ class ShelvesScreen(
             setBackgroundColor(Color.parseColor("#1a2233"))
         }
         frame.addView(img)
-        if (item.badge.isNotEmpty() && item.badge != dominantBadge) {
+        if (item.badge.isNotEmpty() && (stateBadge || item.badge != dominantBadge)) {
             frame.addView(TextView(host).apply {
                 text = item.badge
-                setTextSize(9.5f)
-                setTextColor(0xFF04121B.toInt())
-                setPadding(dp(5), dp(1), dp(5), dp(1))
-                background = rounded(accent, dp(4))
+                setTextSize(Theme.MICRO)
+                if (stateBadge) {
+                    // 状态：描边标签（空心）+ 状态色，和"来源榜"的实心蓝标签一眼区分
+                    val c = stateColor(item.badge)
+                    setTextColor(c)
+                    background = Theme.rounded(host, 0x99000000.toInt(), c, 6, 1)
+                } else {
+                    setTextColor(Theme.ACCENT_INK)
+                    background = rounded(accent, dp(4))
+                }
+                setPadding(dp(6), dp(2), dp(6), dp(2))
                 layoutParams = FrameLayout.LayoutParams(
                     ViewGroup.LayoutParams.WRAP_CONTENT, ViewGroup.LayoutParams.WRAP_CONTENT,
                 ).apply { leftMargin = dp(6); topMargin = dp(6) }
@@ -355,7 +371,7 @@ class ShelvesScreen(
         cell.addView(frame)
         val label = TextView(host).apply {
             text = if (item.rating > 0) "${item.title}  ★${item.rating}" else item.title
-            setTextSize(12.5f)
+            setTextSize(Theme.CAPTION)
             setTextColor(ink)
             maxLines = 1
             setPadding(dp(2), dp(5), 0, 0)
@@ -419,7 +435,7 @@ class ShelvesScreen(
     private fun endCell(shelf: Shelf): View = TextView(host).apply {
         text = "全部\n›"
         gravity = Gravity.CENTER
-        setTextSize(13f)
+        setTextSize(Theme.CAPTION)
         setTextColor(muted)
         isFocusable = true
         background = rounded(panel, dp(8))

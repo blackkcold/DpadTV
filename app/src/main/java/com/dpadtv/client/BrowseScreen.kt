@@ -38,10 +38,10 @@ class BrowseScreen(
     private val onOpenTitle: (String) -> Unit,
 ) {
 
-    private val accent = 0xFF38BDF8.toInt()
-    private val ink = 0xFFE5E7EB.toInt()
-    private val muted = 0xFF94A3B8.toInt()
-    private val panel = 0xFF1F2937.toInt()
+    private val accent = Theme.ACCENT
+    private val ink = Theme.INK
+    private val muted = Theme.MUTED
+    private val panel = Theme.PANEL
 
     private val scope = CoroutineScope(SupervisorJob() + Dispatchers.Main)
     private val chips = ChipStore(host)
@@ -79,17 +79,17 @@ class BrowseScreen(
         }
         head.addView(TextView(host).apply {
             text = shelf.title
-            setTextSize(20f); setTextColor(ink)
+            setTextSize(Theme.DISPLAY); setTextColor(ink)
         })
         status = TextView(host).apply {
             text = "  · 加载中"
-            setTextSize(12.5f); setTextColor(muted)
+            setTextSize(Theme.CAPTION); setTextColor(muted)
         }
         head.addView(status)
         head.addView(View(host), LinearLayout.LayoutParams(0, 1, 1f))
         head.addView(TextView(host).apply {
             text = "‹ 返回首页"
-            setTextSize(13.5f); setTextColor(ink)
+            setTextSize(Theme.BODY); setTextColor(ink)
             isFocusable = true
             isFocusableInTouchMode = false
             setPadding(dp(13), dp(6), dp(13), dp(6))
@@ -186,7 +186,7 @@ class BrowseScreen(
 
     private fun chipView(label: String, on: Boolean, click: () -> Unit): View = TextView(host).apply {
         text = label
-        setTextSize(13f)
+        setTextSize(Theme.CAPTION)
         setTextColor(if (on) Color.parseColor("#04121B") else ink)
         isFocusable = true
         isFocusableInTouchMode = false
@@ -209,7 +209,7 @@ class BrowseScreen(
         }
         row.addView(TextView(host).apply {
             text = name
-            setTextSize(12f)
+            setTextSize(Theme.CAPTION)
             setTextColor(muted)
             setPadding(0, 0, dp(10), 0)
             layoutParams = LinearLayout.LayoutParams(dp(46), ViewGroup.LayoutParams.WRAP_CONTENT)
@@ -223,7 +223,7 @@ class BrowseScreen(
             }
             row.addView(TextView(host).apply {
                 text = v
-                setTextSize(12.5f)
+                setTextSize(Theme.CAPTION)
                 setTextColor(if (on) accent else muted)
                 isFocusable = true
                 setPadding(dp(10), dp(4), dp(10), dp(4))
@@ -340,7 +340,7 @@ class BrowseScreen(
                     setBackgroundColor(Color.parseColor("#1a2233"))
                 })
                 addView(TextView(host).apply {
-                    setTextSize(12.5f); setTextColor(ink); maxLines = 1
+                    setTextSize(Theme.CAPTION); setTextColor(ink); maxLines = 1
                     setPadding(dp(2), dp(5), 0, 0)
                 })
             }
