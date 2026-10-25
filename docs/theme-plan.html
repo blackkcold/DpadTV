@@ -60,8 +60,8 @@
 <div class="wrap">
 
   <div class="label">Implementation Report · 2026-10-25 · 已落地 · 已装机</div>
-  <h1>UI 主题系统：深色 / 浅色 / 按时间</h1>
-  <p class="sub">Aerial 深色为基线，浅色是同色相的另一极 · 基线 <code>feature/collections@bda7c63</code> · 电视只安装，未做实机测试</p>
+  <h1>UI 主题系统 + Aerial 逐屏改造</h1>
+  <p class="sub">深 / 浅 / 按时间三模式，外加 hero 幕布、详情 backdrop、玻璃分组、播放器 onImage · 基线 <code>bda7c63</code> → <code>c3adda8</code> · 电视未装（本轮）</p>
 
   <div class="kpis">
     <div class="kpi"><div class="v mono">3</div><div class="k">主题模式<br>深 · 浅 · 按时间</div></div>
@@ -123,12 +123,12 @@
 
   <div class="sec"><span class="n">03</span><h2>模拟器实拍</h2><span class="hint">1920×1080 @320dpi，同一份 prefs 走完三种模式</span></div>
   <div class="shots">
-    <div class="shot"><img src="shots/theme/01-home-dark.jpg"><div class="cap"><b>深色首页</b>　底色 #07090C，玻璃靠白 6%/10%，行标题只留一条 12.5sp 的计数</div></div>
-    <div class="shot"><img src="shots/theme/02-home-light.jpg"><div class="cap"><b>浅色首页</b>　同一套布局极性翻转：底色 #F2F3F5，卡片靠投影而不是「提亮」</div></div>
-    <div class="shot"><img src="shots/theme/03-settings-light.jpg"><div class="cap"><b>设置 · 外观组</b>　三个等宽按钮 + 两块真调色板预览，生效中的那块描强调色边</div></div>
+    <div class="shot"><img src="shots/theme/01-home-dark.jpg"><div class="cap"><b>深色首页 · hero</b>　顶部 40% 屏高是当前焦点的封面当幕布，标题 40sp 压暗幕，导航 ghost 叠在图上</div></div>
+    <div class="shot"><img src="shots/theme/02-home-light.jpg"><div class="cap"><b>浅色首页</b>　同一套 hero，白字同样压暗幕（亮底上不给白字留活路）；行标题 13sp、计数右对齐</div></div>
+    <div class="shot"><img src="shots/theme/03-settings-light.jpg"><div class="cap"><b>设置</b>　外观三按钮 + 真调色板预览；每个分组外面套一层玻璃（白 6% + hairline）</div></div>
     <div class="shot"><img src="shots/theme/05-settings-time.jpg"><div class="cap"><b>按时间</b>　20:58 切过去立刻变深色，并长出「浅色时段 07:00–19:00」行</div></div>
     <div class="shot"><img src="shots/theme/04-dialog-light.jpg"><div class="cap"><b>浅色弹窗</b>　长按菜单（曾漏成深底，是 <code>PosterActions</code> 的第 27 处，已修）</div></div>
-    <div class="shot"><img src="shots/theme/06-detail-light.jpg"><div class="cap"><b>浅色详情</b>　主按钮 = accent 底 + 白字，仍是全屏唯一高对比块</div></div>
+    <div class="shot"><img src="shots/theme/06-detail-light.jpg"><div class="cap"><b>浅色详情</b>　封面放大成整屏 backdrop（浅色下退成 16% 水印），片名 40sp，正文压在幕布上</div></div>
   </div>
 
   <div class="sec"><span class="n">04</span><h2>机制</h2><span class="hint">点击切换</span></div>
