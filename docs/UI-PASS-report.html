@@ -1,0 +1,101 @@
+<!DOCTYPE html>
+<html lang="zh-CN">
+<head>
+<meta charset="utf-8">
+<style>
+  .w{width:1080px;font-family:inherit;color:var(--foreground);}
+  .w *{box-sizing:border-box;}
+  .mono{font-variant-numeric:tabular-nums;}
+  .label{font-size:10.5px;letter-spacing:.14em;text-transform:uppercase;color:var(--muted-foreground);}
+  h1{font-size:23px;line-height:1.25;margin:6px 0 4px;font-weight:650;letter-spacing:-.01em;}
+  .sub{font-size:12.5px;color:var(--muted-foreground);margin:0 0 14px;}
+  .kpis{display:grid;grid-template-columns:repeat(4,1fr);gap:9px;margin:12px 0 4px;}
+  .kpi{border:1px solid var(--border);border-radius:10px;padding:9px 11px;background:var(--card);}
+  .kpi .v{font-size:18px;font-weight:650;letter-spacing:-.02em;}
+  .kpi .k{font-size:10.5px;color:var(--muted-foreground);margin-top:2px;}
+  .ok{color:var(--accent);}
+  .sec{display:flex;align-items:baseline;gap:10px;margin:20px 0 9px;}
+  .sec .n{font-size:10.5px;color:var(--accent);font-weight:600;letter-spacing:.1em;}
+  .sec h2{font-size:14.5px;margin:0;font-weight:600;}
+  .sec .hint{font-size:11px;color:var(--muted-foreground);margin-left:auto;}
+  table{width:100%;border-collapse:collapse;font-size:11.5px;}
+  th,td{text-align:left;padding:6px 8px;border-bottom:1px solid var(--border);vertical-align:top;}
+  th{font-size:10px;letter-spacing:.1em;text-transform:uppercase;color:var(--muted-foreground);font-weight:500;}
+  td.m{color:var(--muted-foreground);}
+  code{font-size:10.5px;color:var(--accent);}
+  .tokens{display:grid;grid-template-columns:repeat(4,1fr);gap:8px;}
+  .tk{border:1px solid var(--border);border-radius:9px;padding:8px 10px;background:var(--card);}
+  .tk .n{font-size:10px;letter-spacing:.1em;color:var(--muted-foreground);text-transform:uppercase;}
+  .tk .v{font-size:13px;margin-top:3px;font-weight:600;}
+  .sw{display:flex;gap:6px;margin-top:6px;}
+  .sw i{width:18px;height:18px;border-radius:5px;display:block;border:1px solid var(--border);}
+  .foot{margin-top:16px;padding-top:10px;border-top:1px solid var(--border);display:flex;justify-content:space-between;font-size:10.5px;color:var(--muted-foreground);}
+  .shot{display:grid;grid-template-columns:1fr 1fr;gap:10px;margin-top:8px;}
+  .shot img{width:100%;border:1px solid var(--border);border-radius:8px;}
+</style>
+</head>
+<body>
+<div class="w">
+
+  <div class="label">Design Pass · 2026-10-25 · 设计令牌 + 跨页统一</div>
+  <h1>第二轮：把 6 块屏幕收进同一套设计语言</h1>
+  <p class="sub">不是"换个皮"，是把字号、间距、角标语义、返回路径这些会让人困惑的地方对齐</p>
+
+  <div class="kpis">
+    <div class="kpi"><div class="v mono ok">1</div><div class="k">设计令牌文件</div></div>
+    <div class="kpi"><div class="v mono ok">11</div><div class="k">本轮修掉的不一致</div></div>
+    <div class="kpi"><div class="v mono ok">17</div><div class="k">单测（全绿）</div></div>
+    <div class="kpi"><div class="v mono ok">0</div><div class="k">豆瓣请求</div></div>
+  </div>
+
+  <div class="sec"><span class="n">01</span><h2>令牌：一处定义，全应用取</h2><span class="hint">Theme.kt</span></div>
+  <div class="tokens">
+    <div class="tk"><div class="n">字号</div><div class="v">26 / 22 / 18 / 15 / 12.5 / 10.5</div></div>
+    <div class="tk"><div class="n">页面边距</div><div class="v">48 × 20 dp</div></div>
+    <div class="tk"><div class="n">圆角 / 焦点</div><div class="v">8dp · 描边 3dp · 1.06×</div></div>
+    <div class="tk"><div class="n">颜色</div>
+      <div class="sw">
+        <i style="background:#0B1220"></i><i style="background:#111827"></i><i style="background:#1F2937"></i>
+        <i style="background:#38BDF8"></i><i style="background:#E5E7EB"></i><i style="background:#94A3B8"></i>
+      </div>
+    </div>
+  </div>
+
+  <div class="sec"><span class="n">02</span><h2>修掉的 11 个不一致</h2><span class="hint">按影响排序</span></div>
+  <table>
+    <tr><th style="width:38%">问题</th><th>修法</th></tr>
+    <tr><td><b>状态角标和来源角标长得一样</b><div class="m">"收藏 / 看过" 和 "TOP250" 都是实心蓝，语义冲突</div></td><td class="m">状态＝<b>空心描边 + 状态色</b>（收藏蓝·在看绿·看过灰白·想看黄·弃剧红）；来源保持实心蓝</td></tr>
+    <tr><td>三行上下间距不一致</td><td class="m">统一 <code>GAP_XS</code> + 14dp 节奏</td></tr>
+    <tr><td>品牌名两套：<code>DpadTV</code> / <code>DpadTV Pro</code></td><td class="m">统一 DpadTV Pro，<code>Pro</code> 用弱色，字号 22</td></tr>
+    <tr><td>设置页一列高低不齐的按钮，右侧大片空</td><td class="m">分「内容 / 播放 / 系统」，组内两列等宽</td></tr>
+    <tr><td>直播页、继续观看没有品牌栏</td><td class="m">补品牌栏 + 统一页边距</td></tr>
+    <tr><td>继续观看空态是左上角一行灰字</td><td class="m">居中空态：标题 + 下一步</td></tr>
+    <tr><td><b>详情页 BACK 回首页，搜索上下文丢失</b></td><td class="m">详情页加「‹ 返回」，从结果页进的回结果页</td></tr>
+    <tr><td>结果页 BACK 回首页，改关键词得重来</td><td class="m">结果页 BACK 回搜索页（保留关键词）</td></tr>
+    <tr><td>搜索无结果只有一个空网格</td><td class="m">空态引用关键词 + 两个下一步</td></tr>
+    <tr><td>详情页无法收片单，手势不统一</td><td class="m">长按片名 = 加入片单（与首页同一手势）</td></tr>
+    <tr><td>搜索词没记住，空态无法引用</td><td class="m">新增 <code>lastKeyword</code></td></tr>
+  </table>
+
+  <div class="sec"><span class="n">03</span><h2>前后对比</h2><span class="hint">真实海报 · 模拟器</span></div>
+  <div class="shot">
+    <img src="shots/ui-15-home.png" alt="首页">
+    <img src="shots/ui-16-setup.png" alt="设置">
+  </div>
+
+  <div class="sec"><span class="n">04</span><h2>还没统一（下一轮）</h2><span class="hint"></span></div>
+  <table>
+    <tr><td style="width:34%">片源管理 / 播放设置 / 清理缓存</td><td class="m">仍是上游一列按钮，可直接复用 <code>settingGroup</code></td></tr>
+    <tr><td>直播页 504 频道默认平铺</td><td class="m">建议默认进分组视图，减少遥控器滚动</td></tr>
+    <tr><td>详情页 / 播放器</td><td class="m">只做到"同色同字"，还没做到"同节奏"</td></tr>
+    <tr><td>模拟器顶部 128px 黑边</td><td class="m">phone 系统镜像的 StatusBar，真电视没有</td></tr>
+  </table>
+
+  <div class="foot">
+    <span>commit e1ba3d4 · docs/UX-AUDIT.md 有完整清单</span>
+    <span class="mono">电视仍是官方 1.2.0</span>
+  </div>
+
+</div>
+</body>
+</html>

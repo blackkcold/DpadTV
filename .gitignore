@@ -14,6 +14,11 @@ dist/
 # 本机调试用的截图（真机/模拟器现场图）
 docs/adb-*.png
 
+# Hermes agent 的本地计划/草稿
+.hermes/
+
 # 系统
 .DS_Store
 Thumbs.db
+# 本地走查截图（87MB，不入库）
+docs/shots/

@@ -1,0 +1,172 @@
+<!DOCTYPE html>
+<html lang="zh-CN">
+<head>
+<meta charset="utf-8">
+<style>
+  .wrap{width:1080px;font-family:inherit;color:var(--foreground);}
+  .wrap *{box-sizing:border-box;}
+  .mono{font-variant-numeric:tabular-nums;font-feature-settings:"tnum";}
+  .label{font-size:10.5px;letter-spacing:.14em;text-transform:uppercase;color:var(--muted-foreground);}
+  h1{font-size:26px;line-height:1.2;margin:6px 0 4px;font-weight:650;letter-spacing:-.01em;}
+  .sub{font-size:13px;color:var(--muted-foreground);margin:0 0 14px;}
+  .divider{height:1px;background:var(--border);margin:18px 0;}
+  .kpis{display:grid;grid-template-columns:repeat(5,1fr);gap:10px;margin:14px 0 4px;}
+  .kpi{border:1px solid var(--border);border-radius:10px;padding:10px 12px;background:var(--card);}
+  .kpi .v{font-size:21px;font-weight:650;letter-spacing:-.02em;}
+  .kpi .k{font-size:11px;color:var(--muted-foreground);margin-top:2px;line-height:1.35;}
+  .sec{display:flex;align-items:baseline;gap:10px;margin:22px 0 10px;}
+  .sec .n{font-size:10.5px;color:var(--accent);font-weight:600;letter-spacing:.1em;}
+  .sec h2{font-size:15px;margin:0;font-weight:600;}
+  .sec .hint{font-size:11.5px;color:var(--muted-foreground);margin-left:auto;}
+  code{font-size:11.5px;padding:1px 5px;border-radius:4px;background:color-mix(in oklab,var(--border) 40%,transparent);}
+  table{width:100%;border-collapse:collapse;font-size:12px;}
+  th,td{text-align:left;padding:8px;border-bottom:1px solid var(--border);vertical-align:top;}
+  th{font-size:10.5px;letter-spacing:.1em;text-transform:uppercase;color:var(--muted-foreground);font-weight:500;}
+  td .m{color:var(--muted-foreground);}
+  .cards3{display:grid;grid-template-columns:repeat(3,1fr);gap:10px;}
+  .card{border:1px solid var(--border);border-radius:10px;padding:12px;background:var(--card);}
+  .card h3{margin:0 0 6px;font-size:13px;font-weight:600;}
+  .card p{margin:0;font-size:12px;line-height:1.55;color:var(--muted-foreground);}
+  .card p b{color:var(--foreground);}
+  .tag{display:inline-block;margin-top:8px;font-size:10.5px;padding:2px 7px;border-radius:999px;
+       border:1px solid color-mix(in oklab,var(--accent) 45%,var(--border));
+       color:var(--accent);background:color-mix(in oklab,var(--accent) 10%,transparent);}
+  .tag.red{border-color:color-mix(in oklab,#ff8a80 45%,var(--border));color:#ff9e94;background:color-mix(in oklab,#ff8a80 10%,transparent);}
+  .bars{display:flex;flex-direction:column;gap:9px;}
+  .brow{display:grid;grid-template-columns:150px 1fr 88px;gap:10px;align-items:center;}
+  .brow .t{font-size:11.5px;color:var(--muted-foreground);}
+  .track{position:relative;height:24px;border-radius:5px;background:color-mix(in oklab,var(--border) 50%,transparent);overflow:hidden;}
+  .fill{position:absolute;left:0;top:0;bottom:0;border-radius:5px;
+        background:color-mix(in oklab,var(--accent) 30%,transparent);border-right:2px solid var(--accent);}
+  .fill.now{background:color-mix(in oklab,#ff8a80 26%,transparent);border-right:2px solid #ff8a80;}
+  .fill span{position:absolute;left:8px;top:3px;font-size:10.5px;color:var(--foreground);white-space:nowrap;}
+  .brow .n{font-size:11.5px;text-align:right;color:var(--muted-foreground);}
+  .tl{display:flex;flex-direction:column;gap:8px;}
+  .row{display:grid;grid-template-columns:58px 1fr 50px;gap:10px;align-items:center;}
+  .row .id{font-size:11px;color:var(--accent);font-weight:600;}
+  .row .barwrap{position:relative;height:26px;border-radius:6px;background:color-mix(in oklab,var(--border) 55%,transparent);overflow:hidden;}
+  .row .bar{position:absolute;left:0;top:0;bottom:0;border-radius:6px;
+             background:color-mix(in oklab,var(--accent) 26%,transparent);border-right:2px solid var(--accent);}
+  .row .bar span{position:absolute;left:9px;top:4px;font-size:11.5px;color:var(--foreground);white-space:nowrap;}
+  .row .d{font-size:11.5px;text-align:right;color:var(--muted-foreground);}
+  .dec{display:grid;grid-template-columns:repeat(3,1fr);gap:10px;}
+  .q{border:1px solid var(--border);border-radius:10px;padding:12px;background:var(--card);cursor:pointer;transition:border-color .15s,transform .15s;}
+  .q:hover{border-color:color-mix(in oklab,var(--accent) 55%,var(--border));transform:translateY(-1px);}
+  .q .qt{font-size:12.5px;font-weight:600;margin-bottom:6px;}
+  .q .qd{font-size:11.5px;color:var(--muted-foreground);line-height:1.5;}
+  .q .opt{display:flex;gap:6px;margin-top:8px;flex-wrap:wrap;}
+  .opt span{font-size:11px;padding:3px 7px;border-radius:5px;border:1px solid var(--border);color:var(--muted-foreground);}
+  .opt span.rec{color:var(--foreground);border-color:color-mix(in oklab,var(--accent) 60%,var(--border));background:color-mix(in oklab,var(--accent) 10%,transparent);}
+  .foot{margin-top:18px;padding-top:12px;border-top:1px solid var(--border);display:flex;justify-content:space-between;font-size:11px;color:var(--muted-foreground);}
+</style>
+</head>
+<body>
+<div class="wrap">
+
+  <div class="label">Audit + Delivery · 2026-10-25 · 已落地</div>
+  <h1>筛选慢、没高亮：三个症状，两个根因</h1>
+  <p class="sub">已修筛选高亮/加载态/重试，榜单改为内置索引（1452 条 / 45KB），sidecar 已从代码、仓库、路由器上移除 · 36 单测通过</p>
+
+  <div class="kpis">
+    <div class="kpi"><div class="v mono">2</div><div class="k">独立根因<br>1 个 UI bug + 1 个架构</div></div>
+    <div class="kpi"><div class="v mono">0</div><div class="k">筛选行重建次数<br>建好后再也没重建</div></div>
+    <div class="kpi"><div class="v mono">2.5s</div><div class="k">直连每次节流<br>全局一把 Mutex</div></div>
+    <div class="kpi"><div class="v mono">4.5k</div><div class="k">内置索引条目<br>≈ +180 KB</div></div>
+    <div class="kpi"><div class="v mono">2.5d</div><div class="k">P0 修 UI 半天<br>索引 1 天</div></div>
+  </div>
+
+  <div class="divider"></div>
+
+  <div class="sec"><span class="n">01</span><h2>症状 → 证据</h2><span class="hint">每条都能指到行</span></div>
+  <div class="cards3">
+    <div class="card">
+      <h3>点「日本」不高亮</h3>
+      <p><code>filterRow()</code> 在 <code>build()</code> 里一次性建好，<code>on</code> 是那一刻的快照；点击只跑 <code>renderChips(); reload()</code>，<b>没有一处重建筛选行</b>。</p>
+      <span class="tag red">BrowseScreen.kt:205 / 116</span>
+    </div>
+    <div class="card">
+      <h3>点完屏幕空白</h3>
+      <p><code>reload()</code> 先 <code>items.clear()</code> 把网格清空，只在 12.5sp 小字上写「加载中」，没有骨架也没有进度。</p>
+      <span class="tag red">BrowseScreen.kt:276</span>
+    </div>
+    <div class="card">
+      <h3>慢，而且是全局慢</h3>
+      <p>每次切标签 = 一次豆瓣搜索；直连路径 <code>gate.withLock</code> 全局串行 + 2.5s 节流；命中风控后封 <b>60 分钟</b>且无重试入口。</p>
+      <span class="tag red">CollectionRepo.kt:118</span>
+    </div>
+  </div>
+
+  <div class="sec"><span class="n">02</span><h2>点一下「日本」要等多久</h2><span class="hint">现状 vs 内置索引</span></div>
+  <div class="bars">
+    <div class="brow"><div class="t">侧车命中</div><div class="track"><div class="fill now" style="width:8%"><span>局域网往返</span></div></div><div class="n">30–120ms</div></div>
+    <div class="brow"><div class="t">侧车未命中（回源）</div><div class="track"><div class="fill now" style="width:34%"><span>侧车串行 + 豆瓣</span></div></div><div class="n">1.5–3s</div></div>
+    <div class="brow"><div class="t">侧车不在（直连）</div><div class="track"><div class="fill now" style="width:62%"><span>2.5s 节流 × 排队</span></div></div><div class="n">2.5s–12s</div></div>
+    <div class="brow"><div class="t">命中风控后</div><div class="track"><div class="fill now" style="width:96%"><span>整页停摆</span></div></div><div class="n">60 分钟</div></div>
+    <div class="brow"><div class="t">内置索引（目标）</div><div class="track"><div class="fill" style="width:2%"><span>本地求交</span></div></div><div class="n">&lt; 50ms</div></div>
+  </div>
+
+  <div class="sec"><span class="n">03</span><h2>第一性原理：用户要的是「一屏日本片」</h2><span class="hint">不是「发起一次豆瓣搜索」</span></div>
+  <table>
+    <tr><th style="width:26%">把问题拆对</th><th style="width:22%">现在的做法</th><th>应该怎样</th></tr>
+    <tr><td><b>内容元数据</b><br><span class="m">标题 / 评分 / 年份 / 封面 URL</span></td><td>实时请求豆瓣</td><td class="m"><b>预生成静态索引随包发布</b>。它是周级变化的公共数据，不是实时接口。</td></tr>
+    <tr><td><b>封面图</b></td><td>走 LibreTV <code>/api/proxy</code></td><td class="m">不变。图片才是重资产，跟豆瓣限流无关。</td></tr>
+    <tr><td><b>播放地址</b></td><td>点海报 → 聚合搜索</td><td class="m">不变。这条链路本来就该实时。</td></tr>
+  </table>
+  <p class="sub" style="margin-top:10px">把「榜单」当实时搜索用，是所有慢和限流的源头。<b>该内置的是索引，不是客户端</b>；侧车从「运行期依赖」降级成「构建期工具」。</p>
+
+  <div class="sec"><span class="n">04</span><h2>内置索引的账</h2><span class="hint">算出来，不是估出来</span></div>
+  <table>
+    <tr><th style="width:34%">项</th><th>数</th></tr>
+    <tr><td>标签池 × 每标签条数</td><td class="m">40 × 100（地区 5 / 类型 8 / 年份 4 / 剧集综艺 / TOP250 豆列）</td></tr>
+    <tr><td>去重后条目</td><td class="m"><b>3000–4500</b></td></tr>
+    <tr><td>每条 JSON（title/cover/rate/year/badge）</td><td class="m">≈ 150–180 B → 原始 ≈ 700 KB</td></tr>
+    <tr><td>gzip 后</td><td class="m"><b>≈ 160–200 KB</b>（APK 从 6.3 MB → +2.5%）</td></tr>
+    <tr><td>结构</td><td class="m"><code>tags.json.gz</code> 倒排 + <code>items.json.gz</code> 条目表 + <code>meta.json</code>（日期/版本）</td></tr>
+    <tr><td>筛选 = ？</td><td class="m"><b>多个标签集合求交</b>，毫秒级；不需要为 5×8×4 种组合各存一份</td></tr>
+  </table>
+
+  <div class="sec"><span class="n">05</span><h2>方案对比</h2><span class="hint">按用户能感知的差异排</span></div>
+  <table>
+    <tr><th style="width:22%">维度</th><th style="width:24%">A 现状 + 修 UI</th><th style="width:26%">B 内置索引（推荐）</th><th>C 内置 + 后台刷新</th></tr>
+    <tr><td>切筛选</td><td class="m">1–3s / 2.5s×n</td><td><b>&lt; 50ms</b></td><td>&lt; 50ms</td></tr>
+    <tr><td>无网 / 风控时</td><td class="m">只能看缓存过的组合</td><td><b>全部可用</b></td><td>全部可用</td></tr>
+    <tr><td>要 Docker 吗</td><td class="m">要（常驻）</td><td><b>不要</b>（构建期跑一次）</td><td>不要</td></tr>
+    <tr><td>体积</td><td class="m">0</td><td>+180 KB</td><td>+180 KB</td></tr>
+    <tr><td>成本</td><td class="m">0.5 天</td><td>1.5 天</td><td>2 天</td></tr>
+  </table>
+
+  <div class="sec"><span class="n">06</span><h2>阶段</h2><span class="hint">P0 半天就能感到差别</span></div>
+  <div class="tl">
+    <div class="row"><div class="id mono">P0</div><div class="barwrap"><div class="bar" style="width:9%"><span>修 UI：高亮重建 · 加载态 · 重试 · 焦点</span></div></div><div class="d mono">2h</div></div>
+    <div class="row"><div class="id mono">P1</div><div class="barwrap"><div class="bar" style="width:52%"><span>索引管道：build-index.mjs + LocalIndex + 单测</span></div></div><div class="d mono">1d</div></div>
+    <div class="row"><div class="id mono">P2</div><div class="barwrap"><div class="bar" style="width:76%"><span>Browse 先本地后网络 · 标数据日期</span></div></div><div class="d mono">0.5d</div></div>
+    <div class="row"><div class="id mono">P3</div><div class="barwrap"><div class="bar" style="width:100%"><span>侧车降级为构建期工具，删 :8898 硬编码</span></div></div><div class="d mono">0.5d</div></div>
+  </div>
+
+  <div class="sec"><span class="n">07</span><h2>待你拍板</h2><span class="hint">点一下就当你的回答</span></div>
+  <div class="dec">
+    <div class="q" data-hermes-send="先做 P0：修筛选高亮、加载态、重试与焦点，再谈索引">
+      <div class="qt">Q1 · 先修 UI 还是先做索引</div>
+      <div class="qd">P0 是纯 bug 修复，2 小时，症状当场消失；索引 1 天。</div>
+      <div class="opt"><span class="rec">先 P0（推荐）</span><span>直接上索引</span></div>
+    </div>
+    <div class="q" data-hermes-send="索引按 40 标签 × 100 条做，≈180KB">
+      <div class="qt">Q2 · 索引规模</div>
+      <div class="qd">覆盖越厚冷门片越多，但体积和生成时间都涨。</div>
+      <div class="opt"><span class="rec">40×100（≈180KB）</span><span>20×60（≈60KB）</span></div>
+    </div>
+    <div class="q" data-hermes-send="侧车降级为构建期工具，不再常驻">
+      <div class="qt">Q3 · 侧车去留</div>
+      <div class="qd">索引内置后，运行期不再需要它；只在生成索引时用一次。</div>
+      <div class="opt"><span class="rec">降级为构建期工具</span><span>保留常驻做预热</span></div>
+    </div>
+  </div>
+
+  <div class="foot">
+    <span>完整审计：<code>docs/AUDIT-BROWSE-SIDECAR.md</code></span>
+    <span class="mono">1452 条索引 · 45KB · sidecar 已下线</span>
+  </div>
+
+</div>
+</body>
+</html>

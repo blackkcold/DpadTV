@@ -1,0 +1,94 @@
+<!DOCTYPE html>
+<html lang="zh-CN">
+<head>
+<meta charset="utf-8">
+<style>
+  .w{width:1080px;font-family:inherit;color:var(--foreground);}
+  .w *{box-sizing:border-box;}
+  .mono{font-variant-numeric:tabular-nums;}
+  .label{font-size:10.5px;letter-spacing:.14em;text-transform:uppercase;color:var(--muted-foreground);}
+  h1{font-size:23px;line-height:1.25;margin:6px 0 4px;font-weight:650;letter-spacing:-.01em;}
+  .sub{font-size:12.5px;color:var(--muted-foreground);margin:0 0 14px;}
+  .kpis{display:grid;grid-template-columns:repeat(5,1fr);gap:9px;margin:12px 0 4px;}
+  .kpi{border:1px solid var(--border);border-radius:10px;padding:9px 11px;background:var(--card);}
+  .kpi .v{font-size:18px;font-weight:650;letter-spacing:-.02em;}
+  .kpi .k{font-size:10.5px;color:var(--muted-foreground);margin-top:2px;}
+  .ok{color:var(--accent);}
+  .sec{display:flex;align-items:baseline;gap:10px;margin:20px 0 9px;}
+  .sec .n{font-size:10.5px;color:var(--accent);font-weight:600;letter-spacing:.1em;}
+  .sec h2{font-size:14.5px;margin:0;font-weight:600;}
+  .sec .hint{font-size:11px;color:var(--muted-foreground);margin-left:auto;}
+  table{width:100%;border-collapse:collapse;font-size:11.5px;}
+  th,td{text-align:left;padding:6px 8px;border-bottom:1px solid var(--border);vertical-align:top;}
+  th{font-size:10px;letter-spacing:.1em;text-transform:uppercase;color:var(--muted-foreground);font-weight:500;}
+  td.m{color:var(--muted-foreground);}
+  .pill{display:inline-block;font-size:9.5px;padding:1px 6px;border-radius:5px;border:1px solid var(--border);color:var(--muted-foreground);}
+  .pill.p0{color:#fff;border-color:#ef4444;background:#ef444422;}
+  .pill.p1{color:#fff;border-color:#f59e0b;background:#f59e0b22;}
+  .pill.p2{color:var(--muted-foreground);}
+  .foot{margin-top:16px;padding-top:10px;border-top:1px solid var(--border);display:flex;justify-content:space-between;font-size:10.5px;color:var(--muted-foreground);}
+  .shot{display:grid;grid-template-columns:1fr 1fr;gap:10px;margin-top:8px;}
+  .shot img{width:100%;border:1px solid var(--border);border-radius:8px;}
+</style>
+</head>
+<body>
+<div class="w">
+
+  <div class="label">Milestone Report · M4 · 2026-10-25 · 项目内完成 · 豆瓣零访问</div>
+  <h1>M4 完成：本地推荐上线，顺带把 UX 审计出的 9 个坑填了</h1>
+  <p class="sub">推荐只用你自己的行为；豆瓣接口全程没碰（侧车已切只读缓存模式）</p>
+
+  <div class="kpis">
+    <div class="kpi"><div class="v mono ok">17</div><div class="k">JVM 单测全绿</div></div>
+    <div class="kpi"><div class="v mono ok">8</div><div class="k">推荐信号门槛</div></div>
+    <div class="kpi"><div class="v mono ok">9</div><div class="k">UX 问题已修</div></div>
+    <div class="kpi"><div class="v mono ok">0</div><div class="k">本期豆瓣请求</div></div>
+    <div class="kpi"><div class="v mono">.pro</div><div class="k">包名与官方并存</div></div>
+  </div>
+
+  <div class="sec"><span class="n">01</span><h2>推荐怎么算</h2><span class="hint">纯本地、纯函数、可单测</span></div>
+  <table>
+    <tr><th style="width:18%">层</th><th>做法</th><th style="width:34%">为什么这么定</th></tr>
+    <tr><td>信号</td><td class="m">片单四态 + 播放次数（ev 表），收藏 1.0 / 在看 0.9 / 看过 0.8 / 想看 0.5 / 弃剧 −0.6，30 天半衰</td><td class="m">不猜类型标签——一猜就得再打豆瓣，而豆瓣是最脆的一环</td></tr>
+    <tr><td>特征</td><td class="m">只用「来自哪个榜 + 评分 + 年份」，这些本地一定有</td><td class="m">零额外请求，断网也能算</td></tr>
+    <tr><td>打分</td><td class="m">来源亲和 0.45 / 评分 0.30 / 新鲜 0.15 / 基础 0.10</td><td class="m">避免变成"再来一屏 9 分老片"</td></tr>
+    <tr><td>重排</td><td class="m">MMR（λ=0.35）：同年同评分档相似度 1.0，会被压下去</td><td class="m">多样性是推荐的底线，不是加分项</td></tr>
+    <tr><td>门槛</td><td class="m">信号 &lt; 8 整行不出现</td><td class="m">一行平庸的推荐比没有更伤</td></tr>
+  </table>
+
+  <div class="sec"><span class="n">02</span><h2>UX 审计：修了什么</h2><span class="hint">docs/UX-AUDIT.md</span></div>
+  <table>
+    <tr><th style="width:6%">级别</th><th style="width:38%">问题</th><th>修法</th></tr>
+    <tr><td><span class="pill p0">P0</span></td><td><b>首页一个导航入口都没有</b><div class="m">M1 换首页时把 搜索/继续/直播/片源/设置 全丢了，电视没有地址栏 = 被锁死</div></td><td class="m">顶部常驻导航胶囊，焦点可见</td></tr>
+    <tr><td><span class="pill p0">P0</span></td><td>浏览页 / 片单页只能按 BACK 出</td><td class="m">两页都加「‹ 返回首页」</td></tr>
+    <tr><td><span class="pill p0">P0</span></td><td><b>触摸点一次没反应</b>，要再点一次</td><td class="m"><code>isFocusableInTouchMode=false</code>：点一下即触发</td></tr>
+    <tr><td><span class="pill p0">P0</span></td><td>启动弹「网络失败：no such column: source」</td><td class="m">迁移漏列 → 补列 + v3 兜底</td></tr>
+    <tr><td><span class="pill p1">P1</span></td><td>搜索页一进来就弹全屏键盘</td><td class="m">焦点给列表，用户主动选输入框才起键盘</td></tr>
+    <tr><td><span class="pill p1">P1</span></td><td>横屏输入法「全屏提取」把整页盖成白色</td><td class="m"><code>IME_FLAG_NO_EXTRACT_UI</code></td></tr>
+    <tr><td><span class="pill p1">P1</span></td><td>标语「豆瓣榜单·合并货架」是内部术语</td><td class="m">改成「今晚看点什么」</td></tr>
+    <tr><td><span class="pill p1">P1</span></td><td>侧车报限流时客户端还回退直连（二次打击）</td><td class="m">限流那轮不走直连</td></tr>
+    <tr><td><span class="pill p1">P1</span></td><td>片单只有一两部时行尾一大片空</td><td class="m">补「长按海报加入」占位</td></tr>
+  </table>
+
+  <div class="sec"><span class="n">03</span><h2>还留着的（记录在案，不阻塞）</h2><span class="hint"></span></div>
+  <table>
+    <tr><td style="width:32%"><span class="pill p2">P2</span> 模拟器顶部 128px 黑边</td><td class="m">phone 系统镜像的 StatusBar，真电视没有；已顺手加 <code>setDecorFitsSystemWindows(false)</code></td></tr>
+    <tr><td><span class="pill p2">P2</span> 搜索进度条是系统白条</td><td class="m">与深色主题不搭，打磨阶段统一</td></tr>
+    <tr><td><span class="pill p2">P2</span> 详情页 / 设置页仍是上游风格</td><td class="m">改造半径大，留到打磨阶段</td></tr>
+    <tr><td><span class="pill p2">P2</span> 继续观看行、看过自动判定、1280 宽屏</td><td class="m">未做 / 未验</td></tr>
+  </table>
+
+  <div class="sec"><span class="n">04</span><h2>验收证据</h2><span class="hint">全部模拟器，Pro 包</span></div>
+  <div class="shot">
+    <img src="shots/ux-10-recommend.png" alt="首页：我的片单 + 为你推荐">
+    <img src="shots/ux-13-library.png" alt="我的片单页">
+  </div>
+
+  <div class="foot">
+    <span>commit 7575912 · 侧车 ALLOW_UPSTREAM=0（本期零豆瓣请求）</span>
+    <span class="mono">电视仍是官方 1.2.0，未安装 Pro</span>
+  </div>
+
+</div>
+</body>
+</html>

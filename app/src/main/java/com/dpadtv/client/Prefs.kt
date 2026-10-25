@@ -12,6 +12,10 @@ data class HistoryEntry(
     val durationMs: Long,
     val updatedAt: Long,
     val cover: String = "",
+    /** 整季地址列表：有它才能自动连播/上下集（审计 P1-15） */
+    val urls: List<String> = emptyList(),
+    /** 上次看到第几集 */
+    val index: Int = 0,
 )
 
 /** 本地配置：服务器、会话 Cookie、片源列表。全部存在应用私有 SharedPreferences。 */
@@ -30,6 +34,36 @@ class Prefs(ctx: Context) {
     var cookie: String
         get() = sp.getString("cookie", "") ?: ""
         set(v) = sp.edit().putString("cookie", v).apply()
+
+    /** 首页用合并货架（M1+）。关掉则退回上游的"单榜单海报墙"，便于对比与回滚。 */
+    fun shelvesEnabled(): Boolean = sp.getBoolean("shelves_enabled", true)
+
+    fun setShelvesEnabled(v: Boolean) = sp.edit().putBoolean("shelves_enabled", v).apply()
+
+    /* ----------------------------------------------------------------- 主题 */
+
+    /**
+     * "dark" | "light" | "time"。默认深色 —— 这台电视系统恒报浅色，
+     * 默认跟系统会让更新后突然变白，所以默认值写死深色。
+     */
+    var themeMode: String
+        get() = sp.getString("theme_mode", "dark") ?: "dark"
+        set(v) = sp.edit().putString("theme_mode", v).apply()
+
+    /** 浅色时段：含开始、不含结束。默认 07:00–19:00。 */
+    var themeLightFrom: Int
+        get() = sp.getInt("theme_light_from", 7)
+        set(v) = sp.edit().putInt("theme_light_from", v.coerceIn(0, 23)).apply()
+
+    var themeLightTo: Int
+        get() = sp.getInt("theme_light_to", 19)
+        set(v) = sp.edit().putInt("theme_light_to", v.coerceIn(0, 23)).apply()
+
+    fun themeWindow() = ThemeResolver.Window(themeLightFrom, themeLightTo)
+
+    /** 按当前模式解析「此刻该不该浅色」。 */
+    fun isLightNow(): Boolean =
+        ThemeResolver.isLight(ThemeMode.of(themeMode), ThemeResolver.currentHour(), themeWindow())
 
     fun sources(): MutableList<SourceConfig> {
         val text = sp.getString("sources", "[]") ?: "[]"
@@ -131,6 +165,11 @@ class Prefs(ctx: Context) {
                         durationMs = o.optLong("durationMs", 0),
                         updatedAt = o.optLong("updatedAt", 0),
                         cover = o.optString("cover", ""),
+                        urls = runCatching {
+                            val a = o.optJSONArray("urls") ?: JSONArray()
+                            (0 until a.length()).map { i -> a.optString(i) }
+                        }.getOrDefault(emptyList()),
+                        index = o.optInt("index", 0),
                     ),
                 )
             }
@@ -160,7 +199,9 @@ class Prefs(ctx: Context) {
                     .put("positionMs", e.positionMs)
                     .put("durationMs", e.durationMs)
                     .put("updatedAt", e.updatedAt)
-                    .put("cover", e.cover),
+                    .put("cover", e.cover)
+                    .put("index", e.index)
+                    .put("urls", JSONArray(e.urls)),
             )
         }
         sp.edit().putString("history", arr.toString()).apply()
@@ -175,7 +216,9 @@ class Prefs(ctx: Context) {
                     .put("positionMs", e.positionMs)
                     .put("durationMs", e.durationMs)
                     .put("updatedAt", e.updatedAt)
-                    .put("cover", e.cover),
+                    .put("cover", e.cover)
+                    .put("index", e.index)
+                    .put("urls", JSONArray(e.urls)),
             )
         }
         sp.edit().putString("history", arr.toString()).apply()
@@ -308,7 +351,9 @@ class Prefs(ctx: Context) {
                     .put("positionMs", e.positionMs)
                     .put("durationMs", e.durationMs)
                     .put("updatedAt", e.updatedAt)
-                    .put("cover", e.cover),
+                    .put("cover", e.cover)
+                    .put("index", e.index)
+                    .put("urls", JSONArray(e.urls)),
             )
         }
         sp.edit().putString("history", arr.toString()).apply()

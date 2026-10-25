@@ -1,0 +1,190 @@
+<!DOCTYPE html>
+<html lang="zh-CN">
+<head>
+<meta charset="utf-8">
+<style>
+  .wrap{width:1080px;font-family:inherit;color:var(--foreground);}
+  .wrap *{box-sizing:border-box;}
+  .mono{font-variant-numeric:tabular-nums;font-feature-settings:"tnum";}
+  .label{font-size:10.5px;letter-spacing:.14em;text-transform:uppercase;color:var(--muted-foreground);}
+  h1{font-size:26px;line-height:1.2;margin:6px 0 4px;font-weight:650;letter-spacing:-.01em;}
+  .sub{font-size:13px;color:var(--muted-foreground);margin:0 0 14px;}
+  .divider{height:1px;background:var(--border);margin:18px 0;}
+  .kpis{display:grid;grid-template-columns:repeat(5,1fr);gap:10px;margin:14px 0 4px;}
+  .kpi{border:1px solid var(--border);border-radius:10px;padding:10px 12px;background:var(--card);}
+  .kpi .v{font-size:21px;font-weight:650;letter-spacing:-.02em;}
+  .kpi .k{font-size:11px;color:var(--muted-foreground);margin-top:2px;line-height:1.35;}
+  .sec{display:flex;align-items:baseline;gap:10px;margin:22px 0 10px;}
+  .sec .n{font-size:10.5px;color:var(--accent);font-weight:600;letter-spacing:.1em;}
+  .sec h2{font-size:15px;margin:0;font-weight:600;}
+  .sec .hint{font-size:11.5px;color:var(--muted-foreground);margin-left:auto;}
+  .cards3{display:grid;grid-template-columns:repeat(3,1fr);gap:10px;}
+  .card{border:1px solid var(--border);border-radius:10px;padding:12px;background:var(--card);}
+  .card h3{margin:0 0 6px;font-size:13px;font-weight:600;}
+  .card p{margin:0;font-size:12px;line-height:1.55;color:var(--muted-foreground);}
+  .tag{display:inline-block;margin-top:8px;font-size:10.5px;padding:2px 7px;border-radius:999px;
+       border:1px solid color-mix(in oklab,var(--accent) 45%,var(--border));
+       color:var(--accent);background:color-mix(in oklab,var(--accent) 10%,transparent);}
+  code{font-size:11.5px;padding:1px 5px;border-radius:4px;background:color-mix(in oklab,var(--border) 40%,transparent);}
+  .pals{display:flex;gap:12px;flex-wrap:wrap;}
+  .pal{flex:1 1 420px;border:1px solid var(--border);border-radius:10px;padding:10px 12px;}
+  .pal .ph{display:flex;justify-content:space-between;align-items:baseline;margin-bottom:8px;}
+  .pal .ph b{font-size:12.5px;} .pal .ph span{font-size:10.5px;color:var(--muted-foreground);}
+  .strip{display:flex;gap:6px;}
+  .sw{flex:1;height:44px;border-radius:6px;border:1px solid rgba(128,128,128,.22);position:relative;}
+  .sw em{position:absolute;left:5px;bottom:3px;font-style:normal;font-size:9px;}
+  .ratios{display:flex;gap:14px;margin-top:8px;font-size:10.5px;color:var(--muted-foreground);flex-wrap:wrap;}
+  .ratios b{color:var(--foreground);font-weight:600;}
+  .shots{display:grid;grid-template-columns:1fr 1fr;gap:10px;}
+  .shot{border:1px solid var(--border);border-radius:10px;overflow:hidden;}
+  .shot img{display:block;width:100%;height:auto;}
+  .shot .cap{font-size:11px;padding:7px 10px;color:var(--muted-foreground);border-top:1px solid var(--border);}
+  .shot .cap b{color:var(--foreground);font-weight:600;}
+  .tabs{display:flex;gap:6px;margin-bottom:10px;}
+  .tab{font-size:12.5px;padding:6px 12px;border-radius:8px;border:1px solid var(--border);
+       background:transparent;color:var(--muted-foreground);cursor:pointer;font-family:inherit;}
+  .tab.on{color:var(--foreground);border-color:color-mix(in oklab,var(--accent) 60%,var(--border));
+          background:color-mix(in oklab,var(--accent) 12%,transparent);}
+  .pane{display:none;} .pane.on{display:block;}
+  .pane ul{margin:6px 0 0;padding-left:16px;}
+  .pane li{font-size:12.5px;line-height:1.72;color:var(--muted-foreground);}
+  .pane li b{color:var(--foreground);font-weight:600;}
+  table{width:100%;border-collapse:collapse;font-size:12px;}
+  th,td{text-align:left;padding:7px 8px;border-bottom:1px solid var(--border);vertical-align:top;}
+  th{font-size:10.5px;letter-spacing:.1em;text-transform:uppercase;color:var(--muted-foreground);font-weight:500;}
+  td .m{color:var(--muted-foreground);}
+  .foot{margin-top:18px;padding-top:12px;border-top:1px solid var(--border);display:flex;justify-content:space-between;font-size:11px;color:var(--muted-foreground);}
+</style>
+</head>
+<body>
+<div class="wrap">
+
+  <div class="label">Implementation Report · 2026-10-25 · 已落地 · 已装机</div>
+  <h1>UI 主题系统 + Aerial 逐屏改造</h1>
+  <p class="sub">深 / 浅 / 按时间三模式，外加 hero 幕布、详情 backdrop、玻璃分组、播放器 onImage · 基线 <code>bda7c63</code> → <code>c3adda8</code> · 电视未装（本轮）</p>
+
+  <div class="kpis">
+    <div class="kpi"><div class="v mono">3</div><div class="k">主题模式<br>深 · 浅 · 按时间</div></div>
+    <div class="kpi"><div class="v mono">109</div><div class="k">Theme 引用点<br>调用方零改动</div></div>
+    <div class="kpi"><div class="v mono">27</div><div class="k">弹窗调用点<br>全部按主题选样式</div></div>
+    <div class="kpi"><div class="v mono">28</div><div class="k">单测通过<br>新增 11 例解析器</div></div>
+    <div class="kpi"><div class="v mono">30</div><div class="k">对比度断言<br>脚本可复现</div></div>
+  </div>
+
+  <div class="divider"></div>
+
+  <div class="sec"><span class="n">01</span><h2>三条实测，决定了方案的形状</h2><span class="hint">adb 只读 + 源码计数 + 对比度计算</span></div>
+  <div class="cards3">
+    <div class="card">
+      <h3>「跟随系统」被删掉了</h3>
+      <p><code>cmd uimode night</code> → <b>no</b>，<code>dumpsys uimode</code> → <code>mNightModeLocked=true</code>。系统恒浅色且改不了。</p>
+      <span class="tag">→ 只留深 / 浅 / 按时间，默认深色</span>
+    </div>
+    <div class="card">
+      <h3>焦点环改成双环</h3>
+      <p>单色环压亮海报只有 <b>1.04:1</b>（等于隐形）。环画在内容图上，换个主题色救不了。</p>
+      <span class="tag">→ accent 2dp + 对向 halo 2dp</span>
+    </div>
+    <div class="card">
+      <h3>颜色被快照进实例字段</h3>
+      <p>18 处 <code>private val ACCENT = Theme.ACCENT</code>，换肤对已建界面完全无效。</p>
+      <span class="tag">→ 全改 getter + 就地重画</span>
+    </div>
+  </div>
+
+  <div class="sec"><span class="n">02</span><h2>两套调色板</h2><span class="hint">括号内为实测对比度，脚本可复现</span></div>
+  <div class="pals">
+    <div class="pal">
+      <div class="ph"><b>深色 · Aerial</b><span>bg #07090C</span></div>
+      <div class="strip">
+        <div class="sw" style="background:#07090C"><em style="color:#9B9DA0">bg</em></div>
+        <div class="sw" style="background:#16181B"><em style="color:#9B9DA0">glass1</em></div>
+        <div class="sw" style="background:#202224"><em style="color:#9B9DA0">glass2</em></div>
+        <div class="sw" style="background:#F5F7FA"><em style="color:#3a3a3a">ink 18.6</em></div>
+        <div class="sw" style="background:#9B9DA0"><em style="color:#1a1a1a">muted 7.3</em></div>
+        <div class="sw" style="background:#A7C5FF"><em style="color:#0a1220">accent 11.5</em></div>
+      </div>
+      <div class="ratios"><span>ink/bg <b>18.57</b></span><span>muted/bg <b>7.33</b></span><span>accent/bg <b>11.46</b></span><span>环/最坏海报 <b>5.74</b></span></div>
+    </div>
+    <div class="pal">
+      <div class="ph"><b>浅色 · 新</b><span>bg #F2F3F5（不用纯白，避免眩光）</span></div>
+      <div class="strip">
+        <div class="sw" style="background:#F2F3F5"><em style="color:#5A5B5E">bg</em></div>
+        <div class="sw" style="background:#E8E9EB"><em style="color:#5A5B5E">glass1</em></div>
+        <div class="sw" style="background:#DFE0E1"><em style="color:#5A5B5E">glass2</em></div>
+        <div class="sw" style="background:#0B0D10"><em style="color:#c9c9c9">ink 17.5</em></div>
+        <div class="sw" style="background:#5A5B5E"><em style="color:#f2f2f2">muted 6.1</em></div>
+        <div class="sw" style="background:#2C5FC4"><em style="color:#fff">accent 5.3</em></div>
+      </div>
+      <div class="ratios"><span>ink/bg <b>17.52</b></span><span>muted/bg <b>6.12</b></span><span>accent/bg <b>5.34</b></span><span>环/最坏海报 <b>17.6</b></span></div>
+    </div>
+  </div>
+  <p class="sub" style="margin-top:10px">两次实测否决：浅色 <code>muted</code> 沿用 62% 时在玻璃二档上只有 <b>4.48</b>（差 0.02），提到 66%；浅色 accent 候选 <code>#3A6FE0</code> 只有 <b>4.18</b>，已排除。</p>
+
+  <div class="sec"><span class="n">03</span><h2>模拟器实拍</h2><span class="hint">1920×1080 @320dpi，同一份 prefs 走完三种模式</span></div>
+  <div class="shots">
+    <div class="shot"><img src="shots/theme/01-home-dark.jpg"><div class="cap"><b>深色首页 · hero</b>　顶部 40% 屏高是当前焦点的封面当幕布，标题 40sp 压暗幕，导航 ghost 叠在图上</div></div>
+    <div class="shot"><img src="shots/theme/02-home-light.jpg"><div class="cap"><b>浅色首页</b>　同一套 hero，白字同样压暗幕（亮底上不给白字留活路）；行标题 13sp、计数右对齐</div></div>
+    <div class="shot"><img src="shots/theme/03-settings-light.jpg"><div class="cap"><b>设置</b>　外观三按钮 + 真调色板预览；每个分组外面套一层玻璃（白 6% + hairline）</div></div>
+    <div class="shot"><img src="shots/theme/05-settings-time.jpg"><div class="cap"><b>按时间</b>　20:58 切过去立刻变深色，并长出「浅色时段 07:00–19:00」行</div></div>
+    <div class="shot"><img src="shots/theme/04-dialog-light.jpg"><div class="cap"><b>浅色弹窗</b>　长按菜单（曾漏成深底，是 <code>PosterActions</code> 的第 27 处，已修）</div></div>
+    <div class="shot"><img src="shots/theme/06-detail-light.jpg"><div class="cap"><b>浅色详情</b>　封面放大成整屏 backdrop（浅色下退成 16% 水印），片名 40sp，正文压在幕布上</div></div>
+  </div>
+
+  <div class="sec"><span class="n">04</span><h2>机制</h2><span class="hint">点击切换</span></div>
+  <div class="tabs">
+    <button class="tab on" data-p="p1">令牌</button>
+    <button class="tab" data-p="p2">切换</button>
+    <button class="tab" data-p="p3">时间模式</button>
+    <button class="tab" data-p="p4">踩过的坑</button>
+  </div>
+  <div class="pane on" id="p1"><ul>
+    <li><b>三分法</b>：<code>surfaces</code>（跟随主题）/ <code>onImage</code>（恒定：幕布、压图的字、播放器控制条、焦点 halo、二维码）/ <code>status</code>（语义色两套明度）。</li>
+    <li><b>旧名字保留</b>：<code>Theme.INK</code> 等 109 处一行没改，只把 <code>val</code> 换成 <code>get()</code>；<code>SURFACE/PANEL</code> 直接映射到 glass1/glass2。</li>
+    <li><b>工厂</b>：<code>glass()</code> <code>scrimTop/Bottom()</code> <code>edgeFade()</code> <code>focusRing()</code>，新代码不许再写十六进制。</li>
+  </ul></div>
+  <div class="pane" id="p2"><ul>
+    <li><b>入口唯一</b>：<code>syncTheme()</code>；触发点 = 设置页选模式 / 时间到点 / 时间·时区变更广播 / <code>onResume</code>。</li>
+    <li><b>就地重画</b>：换肤入口只在设置页，所以重画目标恒为 <code>showSetup()</code>，焦点回到「外观」。</li>
+    <li><b>三个不换肤时刻</b>：播放器在前台（pending 到 onResume）、有弹窗打开、正在输入 —— 看片中途整屏变白是唯一的事故形态。</li>
+    <li><b>别的页面到点翻转</b>：靠缓存入参重放 detail / results / browse，不丢正在看的片子。</li>
+  </ul></div>
+  <div class="pane" id="p3"><ul>
+    <li><b>默认 07:00–19:00 浅色</b>，其余深色；<code>start == end</code> 视为非法 → 恒深色。</li>
+    <li><b>排程</b>：<code>Handler.postDelayed</code> 到下一个边界 + 1s；时间/时区变更由动态广播纠正；<code>onResume</code> 再补一次（后台放几天也能纠回来）。</li>
+    <li><b>用 Calendar 不用 java.time</b>：minSdk 23 且没开 desugaring，<code>java.time</code> 会在老设备上崩。</li>
+    <li><b>不做日出日落</b>：要定位权限，电视上没有合理授权入口；固定窗口覆盖 95% 场景。</li>
+  </ul></div>
+  <div class="pane" id="p4"><ul>
+    <li><b>弹窗统计别只 grep 你记得的文件</b>：<code>PosterActions.kt</code> 只有 61 行、一行 <code>Builder(host)</code>，第一次验收就是它漏成深底。</li>
+    <li><b>浅色对话框的 parent 必须是 <code>Theme.Material.Light.Dialog.Alert</code></b>，否则单选列表会「深底深字」。</li>
+    <li><b>halo 40% 不够</b>：中灰海报上只有 2.64:1，加到 60% 黑 / 92% 白才 3.2 / 3.6。</li>
+    <li><b>页面底色必须走 <code>Theme.BG</code></b>：<code>ShelvesScreen</code> 里一行 <code>parseColor("#0b1220")</code> 就让整个首页停在旧配色上（截图当场抓到）。</li>
+  </ul></div>
+
+  <div class="sec"><span class="n">05</span><h2>边界</h2><span class="hint">不做的事</span></div>
+  <table>
+    <tr><th style="width:24%">项</th><th style="width:22%">处置</th><th>理由</th></tr>
+    <tr><td>首帧窗口底</td><td><b>统一深色</b></td><td class="m">windowBackground 由系统选，app 内模式它不知道；浅色下闪一帧深色比白闪柔和，彻底解决要自定义 Splash。</td></tr>
+    <tr><td>系统输入法</td><td><b>跟随系统</b></td><td class="m">键盘是系统的，深色主题下调出浅色键盘会突兀，无解。</td></tr>
+    <tr><td>播放器控制条</td><td><b>不跟随</b></td><td class="m">对比度基准是视频画面；浅色白玻璃在亮场景里会消失。</td></tr>
+    <tr><td>二维码</td><td><b>永远深码浅底</b></td><td class="m">反色码在中低端手机扫码器上识别失败，不是审美问题。</td></tr>
+    <tr><td>Aerial 逐屏改造</td><td><b>本轮不动</b></td><td class="m">hero 幕布、edgeFade、三级字号只是备好了工厂，逐屏仍按 <code>AERIAL-PLAN.md</code> 的 P1/P2 走。</td></tr>
+  </table>
+
+  <div class="foot">
+    <span>完整方案与验收：<code>docs/THEME-PLAN.md</code></span>
+    <span class="mono">电视只安装 · 未做实机测试 · 旧 pro 已卸载并回填 prefs</span>
+  </div>
+
+</div>
+<script>
+  document.querySelectorAll('.tab').forEach(t => t.addEventListener('click', () => {
+    document.querySelectorAll('.tab').forEach(x => x.classList.remove('on'));
+    document.querySelectorAll('.pane').forEach(x => x.classList.remove('on'));
+    t.classList.add('on');
+    document.getElementById(t.dataset.p).classList.add('on');
+  }));
+</script>
+</body>
+</html>

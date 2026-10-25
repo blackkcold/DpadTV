@@ -2,7 +2,10 @@ package com.dpadtv.client
 
 import android.app.Activity
 import android.app.AlertDialog
+import android.content.BroadcastReceiver
+import android.content.Context
 import android.content.Intent
+import android.content.IntentFilter
 import android.graphics.Color
 import android.graphics.Typeface
 import android.graphics.drawable.GradientDrawable
@@ -12,6 +15,8 @@ import android.text.Spanned
 import android.text.style.ForegroundColorSpan
 import android.text.style.StyleSpan
 import android.os.Bundle
+import android.os.Handler
+import android.os.Looper
 import android.text.InputType
 import android.view.Gravity
 import android.view.KeyEvent
@@ -50,12 +55,18 @@ class MainActivity : Activity() {
 
     private lateinit var prefs: Prefs
     private lateinit var api: Api
+    private val library by lazy { LibraryStore(this) }
+    /** 进程级仓库（含 45KB 索引 + 节流/退避状态），见 [DpadApp] */
+    private val repo by lazy { (application as DpadApp).repo }
     private lateinit var imageLoader: ImageLoader
     private lateinit var root: FrameLayout
     private val scope = CoroutineScope(SupervisorJob() + Dispatchers.Main.immediate)
     private var job: Job? = null
 
     private var lastResults: List<SearchItem> = emptyList()
+    /** 这次搜索是冲着哪部片去的（片名 + 年份）；用来在同一堆同名命中里挑最像的那条 */
+    private var wantTitle = ""
+    private var wantYear = ""
     private var recommendItems: List<DoubanItem> = emptyList()
     private var liveChannels: List<Channel> = emptyList()
     private var liveChannelSource: String = ""
@@ -72,21 +83,226 @@ class MainActivity : Activity() {
     private var busyDialog: AlertDialog? = null
     /** 当前界面名，用于实现遥控器 BACK 的层级回退（否则任何界面按返回都会直接退出应用）。 */
     private var currentScreen = "setup"
+    /** 详情页是从哪一屏进来的：BACK 要回到原处（筛选/片单/历史），不是一律回首页 */
+    private var detailOrigin = ""
+    /** 换肤重画用：详情页入参缓存，避免用户改主题就丢片 */
+    private var lastDetailItem: SearchItem? = null
+    private var lastDetailData: Detail? = null
+    private var lastShelf: Shelf? = null
+    /** 启动页的连接失败原因：写在页面上，不弹模态框挡住「先看本地榜单」 */
+    private var bootError = ""
+    /** 上一次搜索词，空态文案要用 */
+    private var lastKeyword = ""
+    /** 直播分组是否还没被用户手动选过（用于"默认进第一个分组"） */
+    private var liveGroupAuto = true
     /** 设置页是否展开「服务器连接」区块。已连接时默认收起（低频操作不占首屏） */
     private var setupShowFields = false
     private val REQ_PICK_JSON = 1001
     private val REQ_STORAGE = 1002
 
+    /* ------------------------------------------------------------ 主题系统 */
+
+    private val themeHandler = Handler(Looper.getMainLooper())
+    private var themeReceiver: BroadcastReceiver? = null
+    private var themeResumed = false
+    private var themePending = false
+
+    /**
+     * 时间到点的回调。
+     * 播放中 / 弹窗中 / 输入中不换肤 —— 整屏变白是这个功能唯一的事故形态。
+     */
+    private val themeTick = Runnable {
+        if (!themeFlipAllowed()) {
+            themePending = true
+            return@Runnable
+        }
+        if (syncTheme()) rerenderForTheme()
+        scheduleNextThemeFlip()
+    }
+
+    /** 返回 true 表示调色板真的变了（调用方需要重画界面）。 */
+    private fun syncTheme(force: Boolean = false): Boolean {
+        val light = prefs.isLightNow()
+        if (!force && light == Theme.isLight) return false
+        Theme.bind(light)
+        if (::root.isInitialized) root.setBackgroundColor(Theme.BG)
+        // 沉浸式下窗口仍是 edge-to-edge：把装饰层也刷成主题底色，
+        // 否则浅色主题顶部会留一条黑边（模拟器 1080p 实测 60px）
+        window.decorView.setBackgroundColor(Theme.BG)
+        window.statusBarColor = Theme.BG
+        window.navigationBarColor = Theme.BG
+        if (android.os.Build.VERSION.SDK_INT >= 30) {
+            window.insetsController?.setSystemBarsAppearance(
+                if (light) android.view.WindowInsetsController.APPEARANCE_LIGHT_STATUS_BARS else 0,
+                android.view.WindowInsetsController.APPEARANCE_LIGHT_STATUS_BARS,
+            )
+        }
+        return true
+    }
+
+    private fun themeFlipAllowed(): Boolean =
+        themeResumed && busyDialog?.isShowing != true &&
+            currentScreen != "input" && currentScreen != "manualadd"
+
+    private fun scheduleNextThemeFlip() {
+        themeHandler.removeCallbacks(themeTick)
+        if (ThemeMode.of(prefs.themeMode) != ThemeMode.TIME) return
+        val delay = ThemeResolver.millisUntilNextFlip(System.currentTimeMillis(), prefs.themeWindow()) ?: return
+        // +1s：边界那一刻可能还在上一秒，宁可晚一点也不要空转
+        themeHandler.postDelayed(themeTick, delay + 1_000L)
+    }
+
+    /**
+     * 换肤后重画当前页。
+     *
+     * 只有「设置页改模式」和「时间到点且此刻在前台」两条路径会进来。
+     * detail / results / browse 用缓存入参重放 —— 用户改个主题不该丢掉正在看的片子。
+     */
+    private fun rerenderForTheme() {
+        if (!::root.isInitialized) return
+        // 输入/导入/扫码带着不可重建的临时状态（输入框内容、本地文件浏览位置、二维码服务），
+        // 换肤时宁可不重画，也不能把用户正在做的事清掉（审计 P2-7）
+        if (currentScreen in setOf("input", "manualadd", "files", "import", "addsource", "qradd")) return
+        when (currentScreen) {
+            "home" -> showHome()
+            "recommend" -> showRecommend()
+            "detail" -> {
+                val item0 = lastDetailItem
+                val detail0 = lastDetailData
+                if (item0 != null && detail0 != null) showDetail(item0, detail0) else homeRoot()
+            }
+            "results" -> if (lastResults.isNotEmpty()) showResults() else homeRoot()
+            "browse" -> {
+                val shelf0 = lastShelf
+                if (shelf0 != null) openShelf(shelf0) else showShelves()
+            }
+            "library" -> showLibrary()
+            "shelves" -> showShelves()
+            "live" -> showLive()
+            "history" -> showHistory()
+            "sources" -> showSources()
+            "serversettings" -> showServerSettings()
+            "playsettings" -> showPlaySettings()
+            "homebar" -> showHomeBarSettings()
+            "setup" -> showSetup()
+            else -> homeRoot()
+        }
+    }
+
+    private fun homeRoot() = if (prefs.shelvesEnabled()) showShelves() else showRecommend()
+
+    /** 设置页里换模式：就地重画设置页（换肤入口只在这里），焦点回到「外观」。 */
+    private fun setThemeMode(mode: ThemeMode) {
+        prefs.themeMode = when (mode) {
+            ThemeMode.LIGHT -> "light"
+            ThemeMode.TIME -> "time"
+            else -> "dark"
+        }
+        syncTheme(force = true)
+        scheduleNextThemeFlip()
+        showSetup()
+        root.post { root.findViewWithTag<View>("theme")?.requestFocus() }
+    }
+
+    /** 浅色时段：给 5 个常用窗口，别让遥控器去点 24 个小时。 */
+    private fun editThemeWindow() {
+        val presets = listOf(6 to 18, 7 to 19, 8 to 20, 9 to 21, 10 to 22)
+        val labels = presets.map { (a, b) -> "%02d:00 – %02d:00".format(a, b) }
+        val cur = presets.indexOf(prefs.themeLightFrom to prefs.themeLightTo).coerceAtLeast(0)
+        chooseOption("浅色时段（其余时间深色）", labels, cur) { i ->
+            prefs.themeLightFrom = presets[i].first
+            prefs.themeLightTo = presets[i].second
+            setThemeMode(ThemeMode.of(prefs.themeMode))
+        }
+    }
+
+    /** 「外观」分组：三个等宽按钮 + 两块真实调色板预览（选完立刻看得出效果）。 */
+    private fun themeGroup(): View {
+        val box = LinearLayout(this).apply {
+            orientation = LinearLayout.VERTICAL
+            setPadding(0, dp(10), 0, dp(2))
+        }
+        box.addView(TextView(this).apply {
+            text = "外观"
+            setTextSize(Theme.CAPTION)
+            setTextColor(Theme.MUTED)
+            setPadding(0, 0, 0, dp(6))
+        })
+        val row = LinearLayout(this).apply { orientation = LinearLayout.HORIZONTAL }
+        val mode = ThemeMode.of(prefs.themeMode)
+        listOf(ThemeMode.DARK to "深色", ThemeMode.LIGHT to "浅色", ThemeMode.TIME to "按时间").forEach { (m, label) ->
+            val tv = equalButton(label, selected = m == mode) { setThemeMode(m) }
+            tv.tag = "theme"
+            row.addView(tv)
+        }
+        box.addView(row)
+        box.addView(themePreview())
+        if (mode == ThemeMode.TIME) {
+            box.addView(
+                equalButton("浅色时段  %02d:00 – %02d:00".format(prefs.themeLightFrom, prefs.themeLightTo)) {
+                    editThemeWindow()
+                }.apply {
+                    tag = "theme"
+                    layoutParams = LinearLayout.LayoutParams(
+                        ViewGroup.LayoutParams.MATCH_PARENT, dp(46)).apply { topMargin = dp(10) }
+                },
+            )
+        }
+        return box
+    }
+
+    /** 预览：两块真调色板并排，生效中的那块描强调色边。颜色全取自令牌，不写死。 */
+    private fun themePreview(): View {
+        val row = LinearLayout(this).apply {
+            orientation = LinearLayout.HORIZONTAL
+            setPadding(0, dp(10), 0, 0)
+        }
+        listOf(Theme.DARK, Theme.LIGHT).forEach { pal ->
+            val on = pal.isLight == Theme.isLight
+            row.addView(LinearLayout(this).apply {
+                orientation = LinearLayout.VERTICAL
+                setPadding(dp(12), dp(8), dp(12), dp(8))
+                background = Theme.rounded(
+                    this@MainActivity, pal.bg,
+                    if (on) Theme.ACCENT else pal.hairline, Theme.RADIUS, if (on) 2 else 1,
+                )
+                layoutParams = LinearLayout.LayoutParams(0, ViewGroup.LayoutParams.WRAP_CONTENT, 1f)
+                    .apply { rightMargin = dp(10) }
+                addView(TextView(this@MainActivity).apply {
+                    text = (if (pal.isLight) "浅色" else "深色") + if (on) " · 生效中" else ""
+                    setTextSize(Theme.CAPTION)
+                    setTextColor(pal.ink)
+                })
+                addView(TextView(this@MainActivity).apply {
+                    text = "海报是主角，界面退到后面"
+                    setTextSize(Theme.MICRO)
+                    setTextColor(pal.muted)
+                    setPadding(0, dp(2), 0, 0)
+                })
+                addView(TextView(this@MainActivity).apply {
+                    text = "● 焦点 / 主操作"
+                    setTextSize(Theme.MICRO)
+                    setTextColor(pal.accent)
+                    setPadding(0, dp(2), 0, 0)
+                })
+            })
+        }
+        return row
+    }
+
     /* ---------------------------------------------------------- 焦点视觉 */
+
 
     // 电视上最致命的问题就是「看不出焦点在哪」。统一用高对比度方案：
     // 聚焦 = 亮蓝填充 + 深色文字 + 4dp 亮色描边 + 轻微放大。
-    private val ACCENT = 0xFF38BDF8.toInt()
-    private val BRIGHT = 0xFFE0F2FE.toInt()
-    private val INK = 0xFF04121B.toInt()
-    private val TEXT_COLOR = 0xFFE5E7EB.toInt()
-    private val PANEL = 0xFF1F2937.toInt()
-    private val BRIGHTER_TEXT = 0xFFCBD5E1.toInt()
+    // 全部走 getter：换主题后这些值必须立刻跟着变。
+    // 之前是 `private val ACCENT = Theme.ACCENT`（构造时快照），换肤对已建界面无效。
+    private val ACCENT get() = Theme.ACCENT
+    private val BRIGHT get() = Theme.ON_IMAGE_INK
+    private val INK get() = Theme.ACCENT_INK
+    private val TEXT_COLOR get() = Theme.INK
+    private val PANEL get() = Theme.PANEL
+    private val BRIGHTER_TEXT get() = Theme.MUTED
 
     /**
      * 给任意可聚焦控件装上焦点视觉。
@@ -109,7 +325,7 @@ class MainActivity : Activity() {
         normalText: Int = TEXT_COLOR,
         focusedBg: Int = ACCENT,
         onFocusChanged: ((Boolean) -> Unit)? = null,
-        focusScale: Float = 1.04f,
+        focusScale: Float = Theme.FOCUS_SCALE,
     ) {
         val normal = InsetDrawable(
             GradientDrawable().apply {
@@ -118,25 +334,9 @@ class MainActivity : Activity() {
             },
             dp(3),
         )
-        // 焦点态 = 同样的填充 + 亮色描边。描边放进背景而不是 foreground：
-        // 实测 Button 上 foreground 不渲染（放大截图里 5 个按钮完全一样），
-        // 画进背景则一定能画出来，卡片和按钮也就能共用同一套样式。
-        val focused = InsetDrawable(
-            GradientDrawable().apply {
-                setColor(normalBg)
-                cornerRadius = dp(8).toFloat()
-                setStroke(dp(5), BRIGHT)
-            },
-            dp(3),
-        )
-        val ring = InsetDrawable(
-            GradientDrawable().apply {
-                setColor(Color.TRANSPARENT)
-                cornerRadius = dp(8).toFloat()
-                setStroke(dp(4), BRIGHT)
-            },
-            dp(2),
-        )
+        // 焦点态 = 同样的填充 + **双环**（强调色 2dp + 对向 halo 2dp）。
+        // 单色环压在亮海报/亮封面上会隐形（实测 1.04~1.28:1），halo 负责在任意底色上托底。
+        val focused = Theme.focusRing(this, Theme.RADIUS, base = normalBg)
 
         // View.setBackground() 会用背景 drawable 的 padding 覆盖控件自身的 padding！
         // InsetDrawable 会报告 3dp 的 padding，于是我们设的 16dp 内边距被无声吃掉，
@@ -207,15 +407,19 @@ class MainActivity : Activity() {
         imageLoader = ImageLoader(api)
         maybeCheckUpdate()
 
+        // 主题必须比任何界面先落地：界面一建出来就会读 Theme.* 的 getter
+        syncTheme(force = true)
         root = FrameLayout(this)
-        root.setBackgroundColor(Color.parseColor("#0b101a"))
+        root.setBackgroundColor(Theme.BG)
         setContentView(root)
         hideSystemUi()
+        scheduleNextThemeFlip()
 
         if (prefs.serverUrl.isEmpty()) showSetup() else showBoot()
     }
 
     override fun onDestroy() {
+        themeHandler.removeCallbacks(themeTick)
         qrServer?.stop()
         scope.cancel()
         super.onDestroy()
@@ -224,9 +428,55 @@ class MainActivity : Activity() {
     override fun onResume() {
         super.onResume()
         hideSystemUi()
+        themeResumed = true
+        // 时间模式可能在后台跨过了边界（或刚从播放器回来）：在这里补一次
+        if (themePending || syncTheme()) {
+            themePending = false
+            rerenderForTheme()
+        }
+        scheduleNextThemeFlip()
+    }
+
+    override fun onPause() {
+        themeResumed = false
+        Theme.bind(prefs.isLightNow())   // 下一屏按最新时刻建，不必等回调
+        super.onPause()
+    }
+
+    /** 改过系统时间 / 换时区 / 跨天：重排下一次翻转，并把当前状态纠正过来。 */
+    override fun onStart() {
+        super.onStart()
+        val r = object : BroadcastReceiver() {
+            override fun onReceive(c: Context?, i: Intent?) {
+                if (syncTheme() && themeResumed) rerenderForTheme()
+                scheduleNextThemeFlip()
+            }
+        }
+        themeReceiver = r
+        runCatching {
+            registerReceiver(
+                r,
+                IntentFilter().apply {
+                    addAction(Intent.ACTION_TIME_CHANGED)
+                    addAction(Intent.ACTION_TIMEZONE_CHANGED)
+                    addAction(Intent.ACTION_DATE_CHANGED)
+                },
+            )
+        }
+    }
+
+    override fun onStop() {
+        themeReceiver?.let { runCatching { unregisterReceiver(it) } }
+        themeReceiver = null
+        super.onStop()
     }
 
     private fun hideSystemUi() {
+        // Android 11+：老的 systemUiVisibility 在 targetSdk 35+ 上会被逐步忽略，
+        // 不显式关掉 decorFitsSystemWindows 就会在顶部留下一条 64dp 黑边（实测 128px/1080p）
+        if (android.os.Build.VERSION.SDK_INT >= 30) {
+            window.setDecorFitsSystemWindows(false)
+        }
         @Suppress("DEPRECATION")
         window.decorView.systemUiVisibility = (
             View.SYSTEM_UI_FLAG_LAYOUT_STABLE
@@ -255,11 +505,13 @@ class MainActivity : Activity() {
         when (currentScreen) {
             "files" -> showSources()
             "qradd" -> { qrServer?.stop(); qrServer = null; showSources() }
-            "results" -> showRecommend()
+            "results" -> showHome()
             "serversettings" -> showSetup()
-            "detail", "live", "setup", "history" -> showRecommend()
+            "detail" -> leaveDetail()
+            "live", "setup", "history" -> showRecommend()
             "sources" -> if (sourcesOrigin == "setup") showSetup() else showRecommend()
-            "home", "recommend" -> super.onBackPressed()
+            "home", "recommend", "shelves" -> super.onBackPressed()
+            "browse", "library" -> showShelves()
             // 导入流程内的页面：逐级退回上一级，而不是退出 App
             "input" -> showAddSource()
             "manualadd" -> showAddSource()
@@ -331,12 +583,13 @@ class MainActivity : Activity() {
         // 字标：Dpad 白 + TV 高亮
         row.addView(
             TextView(this).apply {
-                val text = SpannableString("DpadTV")
+                val text = SpannableString(BuildConfig.APP_NAME)
                 text.setSpan(ForegroundColorSpan(TEXT_COLOR), 0, 4, Spanned.SPAN_EXCLUSIVE_EXCLUSIVE)
                 text.setSpan(ForegroundColorSpan(ACCENT), 4, 6, Spanned.SPAN_EXCLUSIVE_EXCLUSIVE)
                 text.setSpan(StyleSpan(Typeface.BOLD), 0, 6, Spanned.SPAN_EXCLUSIVE_EXCLUSIVE)
+                text.setSpan(ForegroundColorSpan(Theme.MUTED), 6, text.length, Spanned.SPAN_EXCLUSIVE_EXCLUSIVE)
                 setText(text)
-                setTextSize(23f)
+                setTextSize(Theme.BRAND)
                 setPadding(dp(10), 0, dp(12), 0)
                 gravity = Gravity.CENTER_VERTICAL
             },
@@ -345,18 +598,35 @@ class MainActivity : Activity() {
         return row
     }
 
-    private fun titleText(text: String, size: Float = 26f): TextView =
+    private fun titleText(text: String, size: Float = Theme.DISPLAY): TextView =
         TextView(this).apply {
             setText(text)
             setTextSize(size)
-            setTextColor(Color.parseColor("#e5e7eb"))
+            setTextColor(Theme.INK)
+        }
+
+    /**
+     * 详情页片名：**必须可聚焦**。
+     * 长按（加入片单）是发给持焦控件的事件，TextView 默认不可聚焦 →
+     * 屏幕上写着「长按片名可加入片单」，遥控器按下去 100% 没反应（审计 P0-3）。
+     */
+    private fun focusableTitle(text: String, size: Float = Theme.HERO): TextView =
+        titleText(text, size).apply {
+            isFocusable = true
+            isFocusableInTouchMode = false
+            val l = paddingLeft; val t = paddingTop; val r = paddingRight; val b = paddingBottom
+            setOnFocusChangeListener { v, f ->
+                v.background = if (f) Theme.focusRing(this@MainActivity, Theme.RADIUS) else null
+                // setBackground 会用 drawable 的 padding 覆盖控件 padding，换完立刻还回去
+                v.setPadding(l, t, r, b)
+            }
         }
 
     private fun hintText(text: String): TextView =
         TextView(this).apply {
             setText(text)
-            setTextSize(15f)
-            setTextColor(Color.parseColor("#94a3b8"))
+            setTextSize(Theme.BODY)
+            setTextColor(Theme.MUTED)
             setPadding(0, dp(6), 0, dp(10))
         }
 
@@ -370,9 +640,9 @@ class MainActivity : Activity() {
             setPadding(dp(16), dp(10), dp(16), dp(10))
             gravity = Gravity.CENTER_VERTICAL
             setHint(hint)
-            setTextColor(Color.parseColor("#e5e7eb"))
-            setHintTextColor(Color.parseColor("#94a3b8"))
-            setTextSize(18f)
+            setTextColor(Theme.INK)
+            setHintTextColor(Theme.MUTED)
+            setTextSize(Theme.INPUT)
             setSingleLine(true)
             inputType = if (password)
                 InputType.TYPE_CLASS_TEXT or InputType.TYPE_TEXT_VARIATION_PASSWORD
@@ -397,8 +667,8 @@ class MainActivity : Activity() {
             // 输入框不放大：放大后它会比父容器宽出 46px，实测会导致聚焦状态首字符渲染异常
             applyFocusStyle(
                 view = this,
-                normalBg = 0xFF111827.toInt(),
-                focusedBg = 0xFF1E3A5F.toInt(),
+                normalBg = Theme.GLASS_2,
+                focusedBg = Theme.GLASS_2,
                 focusScale = 1f,
                 onFocusChanged = { hasFocus ->
                     if (hasFocus) {
@@ -415,7 +685,7 @@ class MainActivity : Activity() {
         Button(this).apply {
             setText(label)
             isAllCaps = false
-            setTextSize(16f)
+            setTextSize(Theme.BODY)
             isSingleLine = true
             setTextColor(if (primary) INK else TEXT_COLOR)
             // 按内容自适应宽度：固定 dp 宽度在低分辨率电视上会被挤出屏幕
@@ -431,13 +701,13 @@ class MainActivity : Activity() {
                 if (primary) ACCENT else PANEL,
                 this,
                 if (primary) INK else TEXT_COLOR,
-                if (primary) 0xFF7DD3FC.toInt() else ACCENT,
+                ACCENT,
             )
         }
 
     private fun progress(text: String = "加载中…") {
         dismissProgress()
-        busyDialog = AlertDialog.Builder(this)
+        busyDialog = dlg()
             .setMessage(text)
             // 网络挂住时不能把用户锁死在弹窗里（公共采集站经常超时）
             .setCancelable(true)
@@ -475,14 +745,9 @@ class MainActivity : Activity() {
      * 导致「焦点在按钮上，集数行还亮着」两个框同时出现。
      */
     private fun listSelector(): android.graphics.drawable.Drawable {
-        val ring = InsetDrawable(
-            GradientDrawable().apply {
-                setColor(Color.TRANSPARENT)
-                cornerRadius = dp(8).toFloat()
-                setStroke(dp(5), BRIGHT)
-            },
-            dp(3),
-        )
+        // 双环（accent 2dp + 对向 halo 2dp）＋ 内缩 3dp。
+        // 旧版是 5dp 纯白环：浅色主题底色 #F2F3F5 上实测 1.11:1，等于没有焦点。
+        val ring = InsetDrawable(Theme.focusRing(this, Theme.RADIUS), dp(3))
         val empty = android.graphics.drawable.ColorDrawable(Color.TRANSPARENT)
         return android.graphics.drawable.StateListDrawable().apply {
             addState(intArrayOf(android.R.attr.state_focused), ring)
@@ -492,7 +757,12 @@ class MainActivity : Activity() {
 
     private fun newList(): ListView = ListView(this).apply {
         isFocusable = true
-        isFocusableInTouchMode = true
+        // 触摸模式下也要「点一下 = 选中」，不要「点一下只聚焦、再点一下才触发」
+        isFocusableInTouchMode = false
+        // 电视列表：不要右边那条系统滚动条（和深色背景打架），行间用极淡分隔线
+        isVerticalScrollBarEnabled = false
+        divider = android.graphics.drawable.ColorDrawable(Theme.HAIRLINE)
+        dividerHeight = 1
         setSelector(listSelector())
         // AdapterView 会把选中高亮一直留着，焦点移走后就变成「永远是聚焦状态」。
         // 失焦时把 selector 换成透明，重新聚焦再装回来。
@@ -535,7 +805,7 @@ class MainActivity : Activity() {
      */
     private fun newGrid(): GridView = GridView(this).apply {
         isFocusable = true
-        isFocusableInTouchMode = true
+        isFocusableInTouchMode = false
         setSelector(listSelector())
     }
 
@@ -552,7 +822,7 @@ class MainActivity : Activity() {
                 dismissProgress()
                 val msg = describe(e)
                 // 以前失败只弹一个一秒就消失的 toast，网络抖动时用户会以为「点了没反应」
-                AlertDialog.Builder(this@MainActivity)
+                dlg()
                     .setTitle("请求失败")
                     .setMessage(msg)
                     .setPositiveButton("重试") { _, _ -> runApi(loading, block, then) }
@@ -583,42 +853,71 @@ class MainActivity : Activity() {
     /* --------------------------------------------------------- 启动与服务器配置 */
 
     /** 启动页：先自动连服务器（同时拉取服务端下发的片源配置），再进首页。 */
-    private fun showBoot() {
+    private fun showBoot(startConnect: Boolean = true) {
         currentScreen = "boot"
         val col = LinearLayout(this).apply {
             orientation = LinearLayout.VERTICAL
             setPadding(dp(56), dp(36), dp(56), dp(36))
         }
-        col.addView(titleText("正在连接服务器…", 22f))
+        col.addView(titleText(if (bootError.isEmpty()) "正在连接服务器…" else "连不上服务器", 22f))
         col.addView(hintText(api.baseUrl))
+        if (bootError.isNotEmpty()) {
+            col.addView(TextView(this).apply {
+                text = bootError
+                setTextSize(Theme.CAPTION)
+                setTextColor(Theme.DANGER)
+                setPadding(0, dp(2), 0, dp(10))
+            })
+        }
         col.addView(button("手动设置服务器", primary = true) { showSetup() })
         col.addView(button("重新连接") { autoConnect() })
+        // 榜单索引在 APK 里：没有服务器也能翻。给一条不依赖外部服务的入口，
+        // 既避免「服务器一挂就全黑」，也符合「少向外部要数据」的取向。
+        col.addView(button("先看本地榜单") { showShelves() })
         setScreen(col)
-        autoConnect()
+        if (startConnect) autoConnect()
     }
 
+    /**
+     * 自动连接。失败**不弹模态框** —— 启动页上已经写清原因并给了三条出路，
+     * 弹窗只会在离线时把「先看本地榜单」挡死（模拟器实测）。
+     */
     private fun autoConnect() {
-        runApi("正在连接服务器…", {
-            val first = api.status()
-            val st = if (first.passwordRequired && !first.verified) {
-                api.login(prefs.password)
-            } else {
-                first
-            }
-            // 服务端还可能下发 DEFAULT_SUBSCRIPTIONS（订阅链接），需要再解析一次；
-            // 解析失败（例如内网地址被防 SSRF 拦掉）不影响其它通道
-            val subSources = if (prefs.sources().isEmpty() && st.defaultSources.isEmpty()) {
-                st.defaultSubscriptions.flatMap { url ->
-                    runCatching { api.importSourceList(url) }.getOrDefault(emptyList())
+        job?.cancel()
+        job = scope.launch {
+            bootError = ""
+            if (currentScreen == "boot") showBoot(startConnect = false)
+            val result = try {
+                withContext(Dispatchers.IO) {
+                    val first = api.status()
+                    val st = if (first.passwordRequired && !first.verified) api.login(prefs.password) else first
+                    // 服务端还可能下发 DEFAULT_SUBSCRIPTIONS（订阅链接），需要再解析一次；
+                    // 解析失败（例如内网地址被防 SSRF 拦掉）不影响其它通道
+                    val subSources = if (prefs.sources().isEmpty() && st.defaultSources.isEmpty()) {
+                        st.defaultSubscriptions.flatMap { url ->
+                            runCatching { api.importSourceList(url) }.getOrDefault(emptyList())
+                        }
+                    } else {
+                        emptyList()
+                    }
+                    st to subSources
                 }
-            } else {
-                emptyList()
+            } catch (e: Exception) {
+                bootError = describe(e)
+                if (currentScreen == "boot") {
+                    showBoot(startConnect = false)
+                } else {
+                    dlg().setTitle("连接失败").setMessage(bootError)
+                        .setPositiveButton("重试") { _, _ -> autoConnect() }
+                        .setNegativeButton("先看本地榜单") { _, _ -> showShelves() }
+                        .show()
+                }
+                return@launch
             }
-            st to subSources
-        }, { (st, subSources) ->
-            seedFromServer(st, subSources)
-            showRecommend()
-        })
+            seedFromServer(result.first, result.second)
+            // 用户已经主动进了本地榜单，就别把他踢回推荐页
+            if (currentScreen == "boot" || currentScreen == "setup") showRecommend()
+        }
     }
 
     /**
@@ -870,14 +1169,14 @@ class MainActivity : Activity() {
             // 版本号后面加红点 + 提示，用警示色强调
             val start = ("DpadTV v" + BuildConfig.VERSION_NAME).length
             span.setSpan(
-                ForegroundColorSpan(0xFFEF4444.toInt()),
+                ForegroundColorSpan(Theme.DANGER),
                 start,
                 head.length,
                 Spanned.SPAN_EXCLUSIVE_EXCLUSIVE,
             )
         }
         setText(span)
-        setTextColor(0xFF64748B.toInt())
+        setTextColor(Theme.MUTED)
         setTextSize(13f)
         setLineSpacing(dp(4).toFloat(), 1f)
         setPadding(0, dp(18), 0, 0)
@@ -918,7 +1217,7 @@ class MainActivity : Activity() {
             prefs.updateBannerSeen = tag
             showUpdateDetail()
         }.apply {
-            if (!unseen) setTextColor(0xFF94A3B8.toInt())
+            if (!unseen) setTextColor(Theme.MUTED)
         }
     }
 
@@ -929,7 +1228,7 @@ class MainActivity : Activity() {
         // 左栏：更新说明，内容长时可滚动
         val notesView = TextView(this).apply {
             setText(notes)
-            setTextColor(Color.parseColor("#cbd5e1"))
+            setTextColor(Theme.INK)
             setTextSize(14f)
             setLineSpacing(dp(5).toFloat(), 1f)
             setPadding(0, 0, dp(20), 0)
@@ -958,14 +1257,14 @@ class MainActivity : Activity() {
             addView(qrCard, LinearLayout.LayoutParams(dp(196), dp(196)))
             addView(TextView(this@MainActivity).apply {
                 setText("扫码下载")
-                setTextColor(Color.parseColor("#94a3b8"))
+                setTextColor(Theme.MUTED)
                 setTextSize(13f)
                 setPadding(0, dp(12), 0, 0)
             })
             addView(TextView(this@MainActivity).apply {
                 setText(url)
-                setTextColor(0xFF38BDF8.toInt())
-                setTextSize(11f)
+                setTextColor(Theme.ACCENT)
+                setTextSize(Theme.CAPTION)
                 setPadding(0, dp(6), 0, 0)
             })
         }
@@ -977,7 +1276,7 @@ class MainActivity : Activity() {
             addView(right)
         }
 
-        AlertDialog.Builder(this)
+        dlg()
             .setTitle("新版本 " + prefs.latestTag + "（当前 " + BuildConfig.VERSION_NAME + "）")
             .setView(row)
             .setPositiveButton("知道了") { _, _ -> showRecommend() }
@@ -1015,7 +1314,7 @@ class MainActivity : Activity() {
             setPadding(dp(48), dp(24), dp(48), dp(20))
         }
         col.addView(brandRow(false))
-        col.addView(titleText("首页按钮排序", 20f))
+        col.addView(titleText("首页按钮排序", Theme.DISPLAY))
         col.addView(hintText("选中一条按 OK：上移 / 下移 / 隐藏 / 恢复默认"))
 
         val listView = newList()
@@ -1028,7 +1327,7 @@ class MainActivity : Activity() {
             }, onItem = { idx ->
                 val id = order[idx]
                 val isHidden = hidden.contains(id)
-                AlertDialog.Builder(this)
+                dlg()
                     .setTitle(HomeBar.label(id) + if (isHidden) "（已隐藏）" else "")
                     .setItems(
                         arrayOf("上移", "下移", if (isHidden) "显示" else "隐藏", "恢复默认顺序"),
@@ -1076,8 +1375,13 @@ class MainActivity : Activity() {
     private fun showClearPlaybackCache() {
         val bytes = PlaybackCache.sizeBytes(this)
         val mb = bytes / 1024.0 / 1024.0
-        val text = String.format(java.util.Locale.US, "当前占用 %.1f MB\n上限 2 GB，超出后自动淘汰最久未用的片段。", mb)
-        AlertDialog.Builder(this)
+        val text = String.format(
+            java.util.Locale.US,
+            "当前占用 %.1f MB\n上限 %s，超出后自动淘汰最久未用的片段。",
+            mb,
+            if (prefs.cacheLimitMb >= 1024) "${prefs.cacheLimitMb / 1024} GB" else "${prefs.cacheLimitMb} MB",
+        )
+        dlg()
             .setTitle("播放缓存")
             .setMessage(text)
             .setPositiveButton("清空") { _, _ ->
@@ -1108,7 +1412,7 @@ class MainActivity : Activity() {
         val diskText = String.format(java.util.Locale.US, "%.1f MB", diskMb)
         val msg = "图片缓存：$imgs 张\n观看历史：$hist 条\n搜索记录：$search 条\n" +
             "播放进度：$progress 条\n播放缓存（磁盘）：$diskText\n\n片源配置、直播源和服务器设置不会被清除。"
-        AlertDialog.Builder(this)
+        dlg()
             .setTitle("清理缓存")
             .setMessage(msg)
             .setPositiveButton("清理") { _, _ ->
@@ -1124,9 +1428,18 @@ class MainActivity : Activity() {
     }
     /* ------------------------------------------------------------- 播放设置 */
 
+    /**
+     * 对话框工厂：按**解析出来的**主题显式选样式。
+     *
+     * 不能只靠 values-night 限定符 —— 用户可能在系统（这台电视恒报浅色）下显式选深色。
+     * 漏改一处，浅色主题里就会弹出一个黑对话框。
+     */
+    private fun dlg(): AlertDialog.Builder =
+        AlertDialog.Builder(this, if (Theme.isLight) R.style.AppDialogLight else R.style.AppDialogDark)
+
     /** 单选弹窗（用全局对话框主题，和片源操作菜单同一套样式） */
     private fun chooseOption(title: String, options: List<String>, current: Int, onPick: (Int) -> Unit) {
-        AlertDialog.Builder(this)
+        dlg()
             .setTitle(title)
             .setSingleChoiceItems(options.toTypedArray(), current) { dialog, which ->
                 dialog.dismiss()
@@ -1143,7 +1456,7 @@ class MainActivity : Activity() {
             setPadding(dp(48), dp(24), dp(48), dp(20))
         }
         col.addView(brandRow(false))
-        col.addView(titleText("播放设置", 20f))
+        col.addView(titleText("播放设置", Theme.DISPLAY))
         col.addView(hintText("选中一条按 OK，在弹出的菜单里选择"))
 
         fun rows(): List<String> = listOf(
@@ -1182,7 +1495,7 @@ class MainActivity : Activity() {
                     5 -> chooseOption(
                         "播放缓存上限",
                         listOf("512 MB", "1 GB", "2 GB", "4 GB"),
-                        listOf(512, 1024, 2048, 4096).indexOf(prefs.cacheLimitMb).coerceAtLeast(2),
+                        listOf(512, 1024, 2048, 4096).indexOf(prefs.cacheLimitMb).coerceAtLeast(0),
                     ) { i ->
                         prefs.cacheLimitMb = listOf(512, 1024, 2048, 4096)[i]
                         PlaybackCache.recreate(this)
@@ -1209,22 +1522,86 @@ class MainActivity : Activity() {
         col.addView(hintText("服务器与片源  ·  已配置 ${prefs.sources().size} 个片源"))
         col.addView(TextView(this).apply {
             setText("已连接：" + prefs.serverUrl)
-            setTextColor(Color.parseColor("#94a3b8"))
+            setTextColor(Theme.MUTED)
             setTextSize(15f)
             setPadding(0, dp(12), 0, dp(22))
         })
-        col.addView(button("片源管理", primary = true) { showSources() })
-        col.addView(button("播放设置") { showPlaySettings() })
-        col.addView(button("清理缓存") { showClearCache() })
-        col.addView(button("首页按钮排序") { showHomeBarSettings() })
-        col.addView(button("首页更新提示：" + if (prefs.updateBannerEnabled) "开" else "关") {
-            prefs.updateBannerEnabled = !prefs.updateBannerEnabled
-            showSetup()
-        })
-        col.addView(button("修改服务器设置") { showServerSettings() })
-        col.addView(button("返回") { showRecommend() })
+        // 设置项按「外观 / 内容 / 播放 / 系统」分组，组内等宽 ——
+        // 之前是一列高低不齐的按钮，右侧大片空白，3 米外看着像标签云
+        col.addView(themeGroup())
+        col.addView(settingGroup("内容", listOf(
+            "片源管理" to { showSources() },
+            "修改服务器设置" to { showServerSettings() },
+        )))
+        col.addView(settingGroup("播放", listOf(
+            "播放设置" to { showPlaySettings() },
+            "清理缓存" to { showClearCache() },
+        )))
+        col.addView(settingGroup("系统", listOf(
+            "首页按钮排序" to { showHomeBarSettings() },
+            ("更新提示：" + if (prefs.updateBannerEnabled) "开" else "关") to {
+                prefs.updateBannerEnabled = !prefs.updateBannerEnabled
+                showSetup()
+            },
+        )))
+        col.addView(settingsBackRow())
         col.addView(githubFooter())
         setScreen(ScrollView(this).apply { addView(col) })
+    }
+
+    /** 设置分组：小标题 + 两列等宽按钮 */
+    private fun settingGroup(title: String, items: List<Pair<String, () -> Unit>>): View {
+        val box = LinearLayout(this).apply {
+            orientation = LinearLayout.VERTICAL
+            setPadding(0, dp(12), 0, dp(2))
+        }
+        box.addView(TextView(this).apply {
+            text = title
+            setTextSize(Theme.LABEL)
+            setTextColor(Theme.MUTED)
+            letterSpacing = 0.08f
+            setPadding(dp(4), 0, 0, dp(6))
+        })
+        // 组内按钮放进一层玻璃：Aerial 的层级靠这一层，而不是给每个按钮加实色
+        val card = LinearLayout(this).apply {
+            orientation = LinearLayout.VERTICAL
+            setPadding(dp(12), dp(10), dp(12), dp(10))
+            background = Theme.rounded(this@MainActivity, Theme.GLASS_1, Theme.HAIRLINE, Theme.RADIUS_L, 1)
+        }
+        items.chunked(2).forEach { pair ->
+            val row = LinearLayout(this).apply { orientation = LinearLayout.HORIZONTAL }
+            pair.forEach { (label, action) ->
+                row.addView(equalButton(label, action = action))
+            }
+            if (pair.size == 1) {
+                // 单数补一个占位，保证两列对齐
+                row.addView(View(this), LinearLayout.LayoutParams(0, dp(1), 1f).apply {
+                    leftMargin = dp(10)
+                })
+            }
+            card.addView(row)
+        }
+        box.addView(card)
+        return box
+    }
+
+    /** 等宽按钮：设置页专用，避免每个按钮宽度随文字长短跳动 */
+    private fun equalButton(label: String, selected: Boolean = false, action: () -> Unit): TextView {
+        val tv = Theme.pill(this, label, selected = selected)
+        tv.layoutParams = LinearLayout.LayoutParams(0, dp(46), 1f).apply { rightMargin = dp(10) }
+        tv.gravity = Gravity.CENTER_VERTICAL
+        tv.setPadding(dp(16), 0, dp(16), 0)
+        tv.setOnClickListener { action() }
+        return tv
+    }
+
+    private fun settingsBackRow(): View {
+        val row = LinearLayout(this).apply {
+            orientation = LinearLayout.HORIZONTAL
+            setPadding(0, dp(16), 0, 0)
+        }
+        row.addView(button("返回首页") { showRecommend() })
+        return row
     }
 
     /** 服务器设置：只负责地址与密码，其他入口都在设置摘要页 */
@@ -1235,7 +1612,7 @@ class MainActivity : Activity() {
             setPadding(dp(56), dp(36), dp(56), dp(36))
         }
         col.addView(brandRow(false))
-        col.addView(titleText("服务器设置", 20f))
+        col.addView(titleText("服务器设置", Theme.DISPLAY))
         col.addView(hintText("填写 LibreTV 服务端的地址与访问密码"))
 
         val urlField = field(BuildConfig.DEFAULT_URL, prefs.serverUrl.ifEmpty { BuildConfig.DEFAULT_URL })
@@ -1245,7 +1622,7 @@ class MainActivity : Activity() {
 
         val statusLine = TextView(this).apply {
             setText(if (prefs.serverUrl.isEmpty()) "未连接" else "上次连接：" + prefs.serverUrl)
-            setTextColor(Color.parseColor("#94a3b8"))
+            setTextColor(Theme.MUTED)
             setTextSize(15f)
             setPadding(0, dp(14), 0, dp(6))
         }
@@ -1312,7 +1689,7 @@ class MainActivity : Activity() {
             setPadding(dp(40), dp(20), dp(40), dp(16))
         }
         col.addView(brandRow(false))
-        col.addView(titleText("片源管理 · ${sources.size} 个（启用 $enabledCount）", 18f))
+        col.addView(titleText("片源管理 · ${sources.size} 个（启用 $enabledCount）", Theme.DISPLAY))
 
         val bar = LinearLayout(this).apply { orientation = LinearLayout.HORIZONTAL }
         bar.addView(button("添加片源", primary = true) { showAddSource() })
@@ -1351,7 +1728,7 @@ class MainActivity : Activity() {
                 val dot = View(this@MainActivity).apply {
                     background = android.graphics.drawable.GradientDrawable().apply {
                         shape = android.graphics.drawable.GradientDrawable.OVAL
-                        setColor(if (s.enabled) ACCENT else Color.parseColor("#64748b"))
+                        setColor(if (s.enabled) ACCENT else Theme.MUTED)
                     }
                 }
                 val name = TextView(this@MainActivity).apply {
@@ -1363,7 +1740,7 @@ class MainActivity : Activity() {
                 }
                 val domain = TextView(this@MainActivity).apply {
                     text = s.url
-                    setTextColor(Color.parseColor("#64748b"))
+                    setTextColor(Theme.MUTED)
                     setTextSize(13f)
                     isSingleLine = true
                     ellipsize = android.text.TextUtils.TruncateAt.MIDDLE
@@ -1381,10 +1758,10 @@ class MainActivity : Activity() {
                     }
                     setTextColor(
                         when {
-                            !s.enabled -> Color.parseColor("#64748b")
-                            r == null -> Color.parseColor("#94a3b8")
-                            r.first -> Color.parseColor("#4ade80")
-                            else -> Color.parseColor("#f87171")
+                            !s.enabled -> Theme.MUTED
+                            r == null -> Theme.MUTED
+                            r.first -> Theme.ST_WATCHING
+                            else -> Theme.DANGER
                         },
                     )
                     setTextSize(13f)
@@ -1459,7 +1836,7 @@ class MainActivity : Activity() {
             "测试连通性",
             "删除",
         )
-        AlertDialog.Builder(this)
+        dlg()
             .setTitle(s.name)
             .setItems(actions) { _, which ->
                 val cur = prefs.sources()
@@ -1509,7 +1886,7 @@ class MainActivity : Activity() {
             setPadding(dp(24), dp(12), dp(24), 0)
         }
         box.addView(input)
-        AlertDialog.Builder(this)
+        dlg()
             .setTitle(if (name) "片源名称" else "采集站地址")
             .setView(box)
             .setPositiveButton("保存") { _, _ ->
@@ -1629,7 +2006,7 @@ class MainActivity : Activity() {
                 })
                 box.addView(TextView(this@MainActivity).apply {
                     text = desc
-                    setTextColor(Color.parseColor("#64748b"))
+                    setTextColor(Theme.MUTED)
                     setTextSize(13f)
                     setPadding(0, dp(3), 0, 0)
                 })
@@ -1755,7 +2132,7 @@ class MainActivity : Activity() {
         setScreen(col)
     }
     private fun sourceJsonMenu() {
-        AlertDialog.Builder(this)
+        dlg()
             .setTitle("sources.json 从哪里来")
             .setItems(
                 arrayOf("粘贴 JSON 文本", "从设备文件选择（U 盘 / 下载目录）", "从网址下载（可用内网地址）"),
@@ -1782,7 +2159,7 @@ class MainActivity : Activity() {
             setPadding(dp(24), dp(12), dp(24), 0)
         }
         box.addView(input)
-        AlertDialog.Builder(this)
+        dlg()
             .setTitle(title)
             .setView(box)
             .setPositiveButton("确定") { _, _ -> onOk(input.text.toString().trim()) }
@@ -1926,7 +2303,7 @@ class MainActivity : Activity() {
         bindList(listView, 
             sources.map { s -> "${s.name}\n${s.url}" },
             onItem = { idx ->
-                AlertDialog.Builder(this)
+                dlg()
                     .setTitle(sources[idx].name)
                     .setItems(arrayOf("删除该片源")) { _, _ ->
                         val left = prefs.sources().filterIndexed { i, _ -> i != idx }
@@ -1958,7 +2335,7 @@ class MainActivity : Activity() {
         val urlField = field("https://xxx/api.php/provide/vod")
         box.addView(nameField)
         box.addView(urlField)
-        AlertDialog.Builder(this)
+        dlg()
             .setTitle("添加采集站")
             .setView(box)
             .setPositiveButton("添加") { _, _ ->
@@ -1992,7 +2369,11 @@ class MainActivity : Activity() {
         } else {
             lastResults.filter { it.sourceName == sourceFilter }
         }
-        resultGroups = visible.groupBy { it.name }.map { (title, items) -> title to items }
+        // 同名命中可能有十几条（1957 正片 / 2025 短剧 / 电影解说…），
+        // 组内按「像不像用户要的那部」排序，组间用最佳分排序，first() 才是对的
+        resultGroups = visible.groupBy { it.name }
+            .map { (title, items) -> title to HitPicker.rank(items, wantTitle, wantYear) }
+            .sortedByDescending { (_, items) -> HitPicker.score(items.first(), wantTitle, wantYear) }
 
         val col = LinearLayout(this).apply {
             orientation = LinearLayout.VERTICAL
@@ -2001,10 +2382,13 @@ class MainActivity : Activity() {
         col.addView(brandRow(false))
 
         val bar = LinearLayout(this).apply { orientation = LinearLayout.HORIZONTAL }
-        bar.addView(titleText("${resultGroups.size} 部 · ${visible.size} 条结果", 18f))
+        bar.addView(titleText(
+            if (resultGroups.isEmpty()) "没有结果" else "${resultGroups.size} 部 · ${visible.size} 条结果",
+            Theme.TITLE,
+        ))
         bar.addView(button("来源筛选") {
             val names = listOf("全部来源") + lastResults.map { it.sourceName }.distinct().sorted()
-            AlertDialog.Builder(this)
+            dlg()
                 .setTitle("只看某个采集站的结果")
                 .setItems(names.toTypedArray()) { _, which ->
                     sourceFilter = if (which == 0) "" else names[which]
@@ -2012,8 +2396,7 @@ class MainActivity : Activity() {
                 }
                 .show()
         })
-        bar.addView(button("返回推荐") { showRecommend() })
-        bar.addView(button("重新搜索") { showHome() })
+        bar.addView(button("‹ 返回搜索") { showHome() })
         col.addView(hScroll(bar))
 
         if (sourceFilter.isNotEmpty()) {
@@ -2029,6 +2412,16 @@ class MainActivity : Activity() {
         grid.adapter = resultsAdapter()
         grid.setOnItemClickListener { _, _, pos, _ ->
             resultGroups.getOrNull(pos)?.let { openDetail(it.second.first()) }
+        }
+        if (resultGroups.isEmpty()) {
+            col.addView(
+                Theme.emptyState(
+                    this,
+                    "没找到「$lastKeyword」",
+                    "换个片名试试（少写季数/副标题）· 或检查「设置 → 片源」是否可用",
+                ),
+                LinearLayout.LayoutParams(ViewGroup.LayoutParams.MATCH_PARENT, 0, 1f),
+            )
         }
         col.addView(grid, LinearLayout.LayoutParams(
             ViewGroup.LayoutParams.MATCH_PARENT, 0, 1f))
@@ -2049,7 +2442,7 @@ class MainActivity : Activity() {
                 addView(
                     ImageView(this@MainActivity).apply {
                         scaleType = ImageView.ScaleType.CENTER_CROP
-                        setBackgroundColor(Color.parseColor("#1a2233"))
+                        setBackgroundColor(Theme.POSTER_BG)
                     },
                     LinearLayout.LayoutParams(dp(86), dp(120)),
                 )
@@ -2058,19 +2451,21 @@ class MainActivity : Activity() {
                         orientation = LinearLayout.VERTICAL
                         setPadding(dp(12), 0, 0, 0)
                         addView(TextView(this@MainActivity).apply {
-                            setTextSize(15f)
+                            setTextSize(Theme.BODY)
                             setTextColor(TEXT_COLOR)
                             maxLines = 2
+                            ellipsize = android.text.TextUtils.TruncateAt.END
                         })
                         addView(TextView(this@MainActivity).apply {
-                            setTextSize(12f)
-                            setTextColor(0xFF94A3B8.toInt())
-                            maxLines = 2
+                            setTextSize(Theme.CAPTION)
+                            setTextColor(Theme.MUTED)
+                            maxLines = 1
+                            ellipsize = android.text.TextUtils.TruncateAt.END
                             setPadding(0, dp(4), 0, 0)
                         })
                         addView(TextView(this@MainActivity).apply {
-                            setTextSize(11f)
-                            setTextColor(0xFF64748B.toInt())
+                            setTextSize(Theme.CAPTION)
+                            setTextColor(Theme.MUTED)
                             maxLines = 2
                             setPadding(0, dp(4), 0, 0)
                         })
@@ -2090,9 +2485,16 @@ class MainActivity : Activity() {
                 first.remarks.takeIf { it.isNotEmpty() },
             ).joinToString(" · ")
             val srcs = items.map { it.sourceName }.distinct()
-            (info.getChildAt(2) as TextView).text =
-                if (srcs.size > 1) "${srcs.size} 个来源 · ${srcs.joinToString(" / ")}"
-                else srcs.firstOrNull().orEmpty()
+            // 来源只列前两个 + 总数：长串会在卡片里折行，把三行信息挤成五行
+            (info.getChildAt(2) as TextView).apply {
+                text = when {
+                    srcs.size > 2 -> "${srcs.take(2).joinToString(" / ")} 等 ${srcs.size} 个来源"
+                    srcs.size == 2 -> srcs.joinToString(" / ")
+                    else -> srcs.firstOrNull().orEmpty()
+                }
+                maxLines = 1
+                ellipsize = android.text.TextUtils.TruncateAt.END
+            }
 
             poster.tag = first.pic
             poster.setImageBitmap(null)
@@ -2136,7 +2538,11 @@ class MainActivity : Activity() {
 
         val header = LinearLayout(this).apply { orientation = LinearLayout.HORIZONTAL }
         col.addView(brandRow(false))
-        val keywordField = field("输入影片名称…")
+        val keywordField = field("输入影片名称…").apply {
+            // 横屏单行输入框会被输入法切成「全屏提取模式」，整页被白底键盘盖住；
+            // 明确告诉 IME 不要走提取模式，输入时还能看见页面上下的热门/历史
+            imeOptions = imeOptions or android.view.inputmethod.EditorInfo.IME_FLAG_NO_EXTRACT_UI
+        }
         keywordField.imeOptions = EditorInfo.IME_ACTION_SEARCH
         header.addView(keywordField, LinearLayout.LayoutParams(dp(580), dp(48)))
         header.addView(button("搜索", primary = true) { doSearch(keywordField.text.toString()) })
@@ -2168,7 +2574,7 @@ class MainActivity : Activity() {
                     "片源 ${prefs.sources().size} 个 · 服务器 ${api.baseUrl}" +
                         if (sourceFilter.isEmpty()) "" else " · 只看：$sourceFilter",
                 )
-                setTextColor(Color.parseColor("#64748b"))
+                setTextColor(Theme.MUTED)
                 setTextSize(13f)
                 setPadding(0, dp(6), dp(12), dp(8))
             },
@@ -2178,7 +2584,7 @@ class MainActivity : Activity() {
             statusRow.addView(
                 button(if (sourceFilter.isEmpty()) "来源筛选" else "来源：" + sourceFilter.take(8)) {
                     val names = listOf("全部来源") + lastResults.map { it.sourceName }.distinct().sorted()
-                    AlertDialog.Builder(this)
+                    dlg()
                         .setTitle("只看某个采集站的结果")
                         .setItems(names.toTypedArray()) { _, which ->
                             sourceFilter = if (which == 0) "" else names[which]
@@ -2250,12 +2656,16 @@ class MainActivity : Activity() {
         }
 
         setScreen(col)
-        if (lastResults.isEmpty()) keywordField.requestFocus() else listView.requestFocus()
+        // 默认焦点给列表/历史，**不要**落到输入框上——电视上一进页面就弹全屏键盘会把内容全挡掉
+        listView.requestFocus()
     }
 
-    private fun doSearch(keyword: String) {
+    private fun doSearch(keyword: String, year: String = "") {
+        wantTitle = keyword
+        wantYear = year
         val kw = keyword.trim()
         if (kw.isEmpty()) { toast("请输入片名"); return }
+        lastKeyword = kw
         val sources = prefs.sources().filter { it.enabled }
         if (sources.isEmpty()) { toast("没有启用的片源，去「片源管理」开启或添加"); showSources(); return }
         runApi("正在搜索「$kw」（${sources.size} 个源，可能需要几秒）…", {
@@ -2302,6 +2712,8 @@ class MainActivity : Activity() {
     /* --------------------------------------------------------------- 详情页 */
 
     private fun openDetail(item: SearchItem) {
+        // 换源时 currentScreen 已经是 detail，别把来源改成 "detail"
+        if (currentScreen != "detail") detailOrigin = currentScreen
         val source = prefs.sources().firstOrNull { it.url == item.sourceUrl }
             ?: SourceConfig(item.sourceName, item.sourceUrl)
         runApi("正在获取详情…", { api.detail(item.vodId, source) }, { detail ->
@@ -2313,65 +2725,174 @@ class MainActivity : Activity() {
         })
     }
 
+    /**
+     * 离开详情页：回到**进来的那一屏**。
+     * 旧版一律 showRecommend()，而从筛选页/片单/历史进来的用户会发现自己被踢回首页（审计 P1-10）。
+     */
+    private fun leaveDetail() {
+        val origin = detailOrigin
+        detailOrigin = ""
+        when (origin) {
+            "results" -> if (lastResults.isNotEmpty()) showResults() else showHome()
+            "browse" -> lastShelf?.let { openShelf(it) } ?: showShelves()
+            "library" -> showLibrary()
+            "history" -> showHistoryCards()
+            "home" -> showHome()
+            "shelves" -> showShelves()
+            else -> homeRoot()
+        }
+    }
+
     private fun showDetail(item: SearchItem, detail: Detail) {
         currentScreen = "detail"
+        lastDetailItem = item
+        lastDetailData = detail
+        // 整屏 backdrop：封面放大压暗当背景，文字浮在幕布上（Aerial 的"影像优先"）
+        val backdrop = ImageView(this).apply {
+            scaleType = ImageView.ScaleType.CENTER_CROP
+            alpha = 0f
+        }
         val col = LinearLayout(this).apply {
             orientation = LinearLayout.VERTICAL
-            setPadding(dp(56), dp(28), dp(56), dp(28))
+            setPadding(dp(Theme.PAGE_X), dp(Theme.PAGE_Y), dp(Theme.PAGE_X), dp(20))
         }
+        col.addView(brandRow(false))
+        val topBar = LinearLayout(this).apply {
+            orientation = LinearLayout.HORIZONTAL
+            gravity = Gravity.CENTER_VERTICAL
+            setPadding(0, dp(4), 0, dp(12))
+        }
+        topBar.addView(button("‹ 返回") { leaveDetail() })
+        topBar.addView(View(this), LinearLayout.LayoutParams(0, dp(1), 1f))
+        topBar.addView(TextView(this).apply {
+            text = "长按片名可加入片单"
+            setTextSize(Theme.CAPTION)
+            setTextColor(Theme.MUTED)
+        })
+        col.addView(topBar)
+
         // 封面 + 文字信息做成头部：电视上纯文字太干，有封面能一眼确认是不是要找的那部片
         val header = LinearLayout(this).apply { orientation = LinearLayout.HORIZONTAL }
         val cover = ImageView(this).apply {
             scaleType = ImageView.ScaleType.CENTER_CROP
-            setBackgroundColor(Color.parseColor("#1a2233"))
+            setBackgroundColor(Theme.POSTER_BG)
         }
-        header.addView(cover, LinearLayout.LayoutParams(dp(150), dp(220)))
+        header.addView(cover, LinearLayout.LayoutParams(dp(132), dp(196)))
 
         val info = LinearLayout(this).apply {
             orientation = LinearLayout.VERTICAL
             setPadding(dp(24), 0, 0, 0)
         }
-        info.addView(titleText(detail.info.title.ifEmpty { item.name }, 24f))
-        info.addView(hintText(listOfNotNull(
-            detail.info.year.takeIf { it.isNotEmpty() },
-            detail.info.area.takeIf { it.isNotEmpty() },
-            detail.info.remarks.takeIf { it.isNotEmpty() },
-            item.sourceName,
-            "共 ${detail.episodes.size} 集",
-        ).joinToString(" · ")))
-        if (detail.info.desc.isNotEmpty()) {
+        val titleView = focusableTitle(detail.info.title.ifEmpty { item.name }, Theme.HERO).apply {
+            maxLines = 2
+            ellipsize = android.text.TextUtils.TruncateAt.END
+        }
+        // 详情页也能收进片单：长按片名（和首页/结果页同一个手势）
+        runCatching {
+            val libItem = MovieItem(
+                title = detail.info.title.ifEmpty { item.name },
+                cover = detail.info.cover.ifEmpty { item.pic },
+            )
+            PosterActions.attach(this, titleView, libItem, library)
+        }
+        info.addView(titleView)
+        info.addView(TextView(this).apply {
+            text = listOfNotNull(
+                detail.info.year.takeIf { it.isNotEmpty() },
+                detail.info.area.takeIf { it.isNotEmpty() },
+                detail.info.remarks.takeIf { it.isNotEmpty() },
+                item.sourceName,
+                "共 ${detail.episodes.size} 集",
+            ).joinToString("  ·  ")
+            setTextSize(Theme.CAPTION)
+            setTextColor(Theme.MUTED)
+            setPadding(0, dp(6), 0, dp(8))
+        })
+        val descText = stripHtml(detail.info.desc).trim()
+        if (descText.isNotEmpty() && descText != detail.info.title.ifEmpty { item.name }) {
             info.addView(TextView(this).apply {
-                setText(stripHtml(detail.info.desc))
-                setTextColor(Color.parseColor("#94a3b8"))
-                setTextSize(14f)
-                maxLines = 5
+                setText(descText)
+                setTextColor(Theme.MUTED)
+                setTextSize(Theme.BODY)
+                // 540dp 的老盒子上简介吃 3 行会把选集网格挤到 <40dp，按屏高收一行
+                maxLines = if (resources.displayMetrics.heightPixels < 720) 2 else 3
+                ellipsize = android.text.TextUtils.TruncateAt.END
             })
         }
+        // 主按钮：一键开播（有进度就从上次那集继续），比"在 100 个格子里找第几集"快得多
+        val resumeIdx = detail.episodes.indexOfFirst { prefs.progressOf(it) > 5000L }
+        val actions = LinearLayout(this).apply {
+            orientation = LinearLayout.HORIZONTAL
+            setPadding(0, dp(14), 0, dp(2))
+        }
+        actions.addView(button(
+            if (resumeIdx > 0) "▶ 继续第 ${resumeIdx + 1} 集" else "▶ 播放",
+            primary = true,
+        ) {
+            playFromList(
+                detail.episodes,
+                if (resumeIdx > 0) resumeIdx else 0,
+                detail.info.title.ifEmpty { item.name },
+                detail.info.cover.ifEmpty { item.pic },
+                refKey = LibKey.ref(item.sourceUrl, item.vodId),
+            )
+        })
+        actions.addView(button("加入片单") {
+            val t = detail.info.title.ifEmpty { item.name }
+            // 带上播放源身份：同一个片名在不同源/不同年份是不同的作品，片单要能区分
+            library.put(
+                MovieItem(title = t, cover = detail.info.cover.ifEmpty { item.pic }),
+                LibState.FAV,
+                LibKey.ref(item.sourceUrl, item.vodId),
+            )
+            library.event(t, 0)
+            toast("已加入「收藏」")
+        })
+        info.addView(actions)
+
         header.addView(info, LinearLayout.LayoutParams(
             0, ViewGroup.LayoutParams.WRAP_CONTENT, 1f))
         col.addView(header)
 
         val coverUrl = detail.info.cover.ifEmpty { item.pic }
         if (coverUrl.isNotEmpty()) {
-            imageLoader.load(coverUrl, dp(300), dp(440)) { bmp -> bmp?.let { cover.setImageBitmap(it) } }
+            imageLoader.load(coverUrl, dp(264), dp(392)) { bmp -> bmp?.let { cover.setImageBitmap(it) } }
+            // 同一张图再拉一份大图当背景：ImageLoader 有缓存，不会多打一次网络
+            imageLoader.load(coverUrl, dp(720), dp(1080)) { bmp ->
+                bmp?.let {
+                    backdrop.setImageBitmap(it)
+                    // 深色主题下 backdrop 是"幕布"（文字白字压图），
+                    // 浅色主题下必须退成"水印"：图太实会把深色文字吃掉
+                    val a = if (Theme.isLight) 0.16f else 0.55f
+                    backdrop.animate().alpha(a).setDuration(Theme.HERO_ANIM).start()
+                }
+            }
         }
 
-        col.addView(hintText("选择集数（共 ${detail.episodes.size} 集）："))
 
-        // 换源：同一个片名在其他采集站的结果，一键切换（按来源名去重，避免同一站出现两次）
+        // 换源：同一个片名在其他采集站的结果（按来源去重）。做成一个按钮 + 弹窗，
+        // 而不是占满一整行的 chip —— 电视上垂直空间比水平空间稀缺。
         val alternatives = lastResults
             .filter { it.name == item.name }
             .distinctBy { it.sourceUrl }
         if (alternatives.size > 1) {
-            val row = LinearLayout(this).apply { orientation = LinearLayout.HORIZONTAL }
-            row.addView(hintText("来源："), LinearLayout.LayoutParams(dp(70), dp(44)))
-            alternatives.take(6).forEach { alt ->
-                row.addView(
-                    button((if (alt.sourceUrl == item.sourceUrl) "● " else "") + alt.sourceName.ifEmpty { "来源" }) { if (alt.sourceUrl != item.sourceUrl) openDetail(alt) },
-                )
-            }
-            col.addView(hScroll(row))
+            actions.addView(button("换源 ${alternatives.size}") {
+                val names = alternatives.map {
+                    (if (it.sourceUrl == item.sourceUrl) "● " else "    ") + it.sourceName.ifEmpty { "来源" }
+                }
+                dlg()
+                    .setTitle("选一个采集站")
+                    .setItems(names.toTypedArray()) { _, which ->
+                        val alt = alternatives[which]
+                        if (alt.sourceUrl != item.sourceUrl) openDetail(alt)
+                    }
+                    .show()
+            })
         }
+
+        col.addView(Theme.rowHeader(this, "选集", "共 ${detail.episodes.size} 集").apply {
+            setPadding(0, dp(10), 0, dp(8))
+        })
 
         val epGrid = newGrid().apply {
             numColumns = 8
@@ -2385,9 +2906,11 @@ class MainActivity : Activity() {
             override fun getView(position: Int, convertView: View?, parent: ViewGroup): View {
                 val tv = (convertView as? TextView) ?: TextView(this@MainActivity).apply {
                     gravity = Gravity.CENTER
-                    setTextSize(14f)
-                    setTextColor(TEXT_COLOR)
-                    setPadding(dp(6), dp(14), dp(6), dp(14))
+                    setTextSize(Theme.BODY)
+                    setTextColor(Theme.INK)
+                    setPadding(dp(6), dp(16), dp(6), dp(16))
+                    // 集数格子必须有"卡片感"，否则 8 列下来像一排散落的文字
+                    applyFocusStyle(this, Theme.PANEL, this, focusScale = 1f)
                 }
                 // CMS 的集数标题常常带一段哈希（第1集$4ad62e），这里只保留序号
                 tv.text = "第 ${position + 1} 集"
@@ -2400,12 +2923,13 @@ class MainActivity : Activity() {
                 position,
                 detail.info.title.ifEmpty { item.name },
                 detail.info.cover.ifEmpty { item.pic },
+                refKey = LibKey.ref(item.sourceUrl, item.vodId),
             )
         }
         col.addView(epGrid, LinearLayout.LayoutParams(
             ViewGroup.LayoutParams.MATCH_PARENT, 0, 1f))
 
-        setScreen(col)
+        setScreen(detailRoot(col, backdrop))
     }
 
     /** 从 m3u8 路径里取一个可读标签，例如 .../HD国语版/index.m3u8 → HD国语版 */
@@ -2417,12 +2941,44 @@ class MainActivity : Activity() {
         }
     }
 
-    /** 单集播放（直播频道、观看历史都用这个） */
-    private fun play(url: String, title: String) = playFromList(listOf(url), 0, title)
+    /**
+     * 从观看历史继续：有整季地址列表就交给播放器（能自动连播、能上下集），
+     * 老记录只有单集地址时退回单集播放。
+     */
+    private fun playHistory(h: HistoryEntry) {
+        val list = h.urls.ifEmpty { listOf(h.playUrl) }
+        playFromList(list, h.index.coerceIn(0, list.size - 1), h.title, h.cover, track = false)
+    }
 
-    /** 整季播放：把整个集数列表交给播放器，一集放完自动进下一集 */
-    private fun playFromList(urls: List<String>, index: Int, title: String, cover: String = "") {
+    /** 单集播放（直播频道用）：不写片单 —— 它们不是「片单里的一条」 */
+    private fun play(url: String, title: String) =
+        playFromList(listOf(url), 0, title, track = false)
+
+    /**
+     * 整季播放：把整个集数列表交给播放器，一集放完自动进下一集。
+     *
+     * @param track 是否把这次播放写进片单/推荐画像。直播与历史传 false。
+     */
+    private fun playFromList(
+        urls: List<String>,
+        index: Int,
+        title: String,
+        cover: String = "",
+        track: Boolean = true,
+        refKey: String = "",
+    ) {
         if (urls.isEmpty()) return
+        if (track) {
+            // 播放是兴趣信号，但**不能覆盖用户显式标注的状态**：
+            // 旧版无条件 put(WATCHING)，用户标了「看过/弃剧」，回看一次就被改回「在看」（审计 P0-4）。
+            runCatching {
+                val probe = MovieItem(title = title, cover = cover)
+                if (library.stateOf(probe, refKey) == null) {
+                    library.put(probe, LibState.WATCHING, refKey)
+                }
+                library.event(title, 1)
+            }
+        }
         startActivity(Intent(this, PlayerActivity::class.java).apply {
             putStringArrayListExtra(PlayerActivity.EXTRA_URLS, ArrayList(urls))
             putExtra(PlayerActivity.EXTRA_INDEX, index.coerceIn(0, urls.size - 1))
@@ -2454,37 +3010,70 @@ class MainActivity : Activity() {
 
         val col = LinearLayout(this).apply {
             orientation = LinearLayout.VERTICAL
-            setPadding(dp(48), dp(24), dp(48), dp(20))
+            setPadding(dp(Theme.PAGE_X), dp(Theme.PAGE_Y), dp(Theme.PAGE_X), dp(20))
         }
-        val shown = if (liveGroupFilter.isEmpty()) {
-            liveChannels
-        } else {
-            liveChannels.filter { it.group == liveGroupFilter }
-        }
-        col.addView(titleText("直播  ·  ${shown.size}/${liveChannels.size} 个频道", 20f))
+        col.addView(brandRow(false))
 
-        val bar = LinearLayout(this).apply { orientation = LinearLayout.HORIZONTAL }
-        bar.addView(button("换源") { pickLiveSource() })
-        bar.addView(button("添加直播源") { addLiveDialog() })
-        bar.addView(
-            button(if (liveGroupFilter.isEmpty()) "分组" else "分组：" + liveGroupFilter.take(10)) {
-                val groups = listOf("全部分组") + liveChannels.map { it.group }.distinct().sorted()
-                AlertDialog.Builder(this)
-                    .setTitle("按分组筛选")
-                    .setItems(groups.toTypedArray()) { _, which ->
-                        liveGroupFilter = if (which == 0) "" else groups[which]
-                        showLive()
-                    }
-                    .show()
-            },
+        val groups = liveChannels.groupBy { it.group.ifEmpty { "其他" } }
+            .mapValues { it.value.size }
+
+        // 500 多个频道平铺一列 = 遥控器灾难。首次进页直接落到第一个分组，
+        // 想看全部再点「全部」—— 让默认动作是"缩小范围"而不是"从头滚"。
+        if (liveGroupAuto && groups.size > 2 && liveChannels.size > 60) {
+            // 默认组按"用户最可能先看什么"选：央视 > 卫视 > 人最多的组
+            liveGroupFilter = listOf("央视频道", "卫视频道").firstOrNull { groups.containsKey(it) }
+                ?: groups.maxByOrNull { it.value }?.key.orEmpty()
+            liveGroupAuto = false
+        }
+
+        val shown = if (liveGroupFilter.isEmpty()) liveChannels
+        else liveChannels.filter { it.group.ifEmpty { "其他" } == liveGroupFilter }
+
+        val head = LinearLayout(this).apply {
+            orientation = LinearLayout.HORIZONTAL
+            gravity = Gravity.CENTER_VERTICAL
+        }
+        head.addView(titleText("直播", Theme.DISPLAY))
+        head.addView(TextView(this).apply {
+            text = "  ·  ${shown.size} / ${liveChannels.size} 个频道"
+            setTextSize(Theme.CAPTION)
+            setTextColor(Theme.MUTED)
+        })
+        head.addView(View(this), LinearLayout.LayoutParams(0, dp(1), 1f))
+        head.addView(button("换源") { pickLiveSource() })
+        head.addView(button("添加源") { addLiveDialog() })
+        head.addView(button("‹ 返回") { showRecommend() })
+        col.addView(head)
+
+        // 分组 chip 条：一眼看到有哪些组、各有多少个
+        val chips = LinearLayout(this).apply {
+            orientation = LinearLayout.HORIZONTAL
+            setPadding(0, dp(10), 0, dp(8))
+        }
+        fun chip(label: String, active: Boolean, onClick: () -> Unit) {
+            chips.addView(Theme.pill(this, label, active).apply {
+                setOnClickListener { onClick() }
+            })
+        }
+        chip("全部 ${liveChannels.size}", liveGroupFilter.isEmpty()) {
+            liveGroupFilter = ""; liveGroupAuto = false; showLive()
+        }
+        groups.entries.sortedBy { it.key }.forEach { (g, n) ->
+            chip("$g $n", liveGroupFilter == g) {
+                liveGroupFilter = g; liveGroupAuto = false; showLive()
+            }
+        }
+        col.addView(hScroll(chips))
+
+        // 频道名里的数字按数值排：CCTV3 在 CCTV12 前面，而不是字典序
+        val sorted = shown.sortedWith(
+            compareBy({ it.group }, { Regex("\\d+").replace(it.name) { m -> m.value.padStart(4, '0') } }),
         )
-        bar.addView(button("返回") { showRecommend() })
-        col.addView(hScroll(bar))
-
-        val sorted = shown.sortedWith(compareBy({ it.group }, { it.name }))
         val listView = newList()
-        bindList(listView, 
-            sorted.map { "${it.group}  ·  ${it.name}" },
+        bindList(listView,
+            sorted.map {
+                if (liveGroupFilter.isEmpty()) "${it.group.ifEmpty { "其他" }}  ·  ${it.name}" else it.name
+            },
             onItem = { idx -> play(sorted[idx].url, sorted[idx].name) },
         )
         col.addView(listView, LinearLayout.LayoutParams(
@@ -2500,12 +3089,14 @@ class MainActivity : Activity() {
             addLiveDialog()
             return
         }
-        AlertDialog.Builder(this)
+        dlg()
             .setTitle("选择直播源")
             .setItems(urls.toTypedArray()) { _, which ->
                 prefs.activeLiveUrl = urls[which]
                 liveChannels = emptyList()
                 liveChannelSource = ""
+                liveGroupAuto = true
+                liveGroupFilter = ""
                 showLive()
             }
             .setPositiveButton("添加新的", { _, _ -> addLiveDialog() })
@@ -2520,7 +3111,7 @@ class MainActivity : Activity() {
         box.addView(hintText("填 M3U 播放列表地址。服务端会去抓这个地址，所以必须是公网可访问的（内网地址会被拒）。"))
         val urlField = field("https://iptv-org.github.io/iptv/countries/cn.m3u")
         box.addView(urlField)
-        AlertDialog.Builder(this)
+        dlg()
             .setTitle("添加直播源")
             .setView(box)
             .setPositiveButton("添加") { _, _ ->
@@ -2545,9 +3136,10 @@ class MainActivity : Activity() {
         val items = prefs.history()
         val col = LinearLayout(this).apply {
             orientation = LinearLayout.VERTICAL
-            setPadding(dp(48), dp(24), dp(48), dp(20))
+            setPadding(dp(Theme.PAGE_X), dp(Theme.PAGE_Y), dp(Theme.PAGE_X), dp(20))
         }
-        col.addView(titleText("继续观看  ·  ${items.size} 条", 20f))
+        col.addView(brandRow(false))
+        col.addView(titleText("继续观看  ·  ${items.size} 条", Theme.DISPLAY))
 
         val bar = LinearLayout(this).apply { orientation = LinearLayout.HORIZONTAL }
         bar.addView(button("返回") { showRecommend() })
@@ -2561,7 +3153,8 @@ class MainActivity : Activity() {
         col.addView(hScroll(bar))
 
         if (items.isEmpty()) {
-            col.addView(hintText("还没有观看记录。播过的片子会出现在这里，方便接着看。"))
+            col.addView(Theme.emptyState(this, "还没有观看记录", "播过的片子会出现在这里，方便接着看"), LinearLayout.LayoutParams(
+                ViewGroup.LayoutParams.MATCH_PARENT, 0, 1f))
         } else {
             col.addView(hintText("选中即从上次位置继续播放；长按（或按菜单键）可删除单条。"))
             val listView = newList()
@@ -2569,7 +3162,7 @@ class MainActivity : Activity() {
                 items.map { "${it.title}    ${formatTime(it.positionMs)} / ${formatTime(it.durationMs)}" },
                 onItem = { idx ->
                     val h = items[idx]
-                    play(h.playUrl, h.title)
+                    playHistory(h)
                 },
             )
             listView.setOnItemLongClickListener { _, _, pos, _ ->
@@ -2608,19 +3201,23 @@ class MainActivity : Activity() {
         val items2 = prefs.history()
         val col = LinearLayout(this).apply {
             orientation = LinearLayout.VERTICAL
-            setPadding(dp(40), dp(20), dp(40), dp(16))
+            setPadding(dp(Theme.PAGE_X), dp(Theme.PAGE_Y), dp(Theme.PAGE_X), dp(16))
         }
         col.addView(brandRow(false))
         val bar = LinearLayout(this).apply { orientation = LinearLayout.HORIZONTAL }
-        bar.addView(titleText("继续观看 · ${items2.size} 条", 18f))
-        bar.addView(button("返回推荐") { showRecommend() })
+        bar.addView(titleText("继续观看 · ${items2.size} 条", Theme.DISPLAY))
+        bar.addView(View(this), LinearLayout.LayoutParams(0, dp(1), 1f))
+        bar.addView(button("‹ 返回首页") { showRecommend() })
         if (items2.isNotEmpty()) {
             bar.addView(button("清空历史") { prefs.clearHistory(); toast("已清空"); showHistoryCards() })
         }
         col.addView(hScroll(bar))
 
         if (items2.isEmpty()) {
-            col.addView(hintText("还没有观看记录。播过的片子会出现在这里，方便接着看。"))
+            col.addView(
+                Theme.emptyState(this, "还没有观看记录", "播过的片子会出现在这里，接着看不用再找"),
+                LinearLayout.LayoutParams(ViewGroup.LayoutParams.MATCH_PARENT, 0, 1f),
+            )
         } else {
             col.addView(hintText("选中即从上次位置继续播放"))
             val grid = newGrid().apply {
@@ -2639,7 +3236,7 @@ class MainActivity : Activity() {
                         addView(
                             ImageView(this@MainActivity).apply {
                                 scaleType = ImageView.ScaleType.CENTER_CROP
-                                setBackgroundColor(Color.parseColor("#1a2233"))
+                                setBackgroundColor(Theme.POSTER_BG)
                             },
                             LinearLayout.LayoutParams(dp(86), dp(120)),
                         )
@@ -2648,11 +3245,14 @@ class MainActivity : Activity() {
                                 orientation = LinearLayout.VERTICAL
                                 setPadding(dp(12), 0, 0, 0)
                                 addView(TextView(this@MainActivity).apply {
-                                    setTextSize(15f); setTextColor(TEXT_COLOR); maxLines = 2
+                                    setTextSize(Theme.BODY); setTextColor(TEXT_COLOR); maxLines = 2
+                                    ellipsize = android.text.TextUtils.TruncateAt.END
                                 })
                                 addView(TextView(this@MainActivity).apply {
-                                    setTextSize(12f); setTextColor(0xFF94A3B8.toInt())
-                                    maxLines = 1; setPadding(0, dp(4), 0, 0)
+                                    setTextSize(Theme.CAPTION); setTextColor(Theme.MUTED)
+                                    maxLines = 1
+                                    ellipsize = android.text.TextUtils.TruncateAt.END
+                                    setPadding(0, dp(4), 0, 0)
                                 })
                             },
                             LinearLayout.LayoutParams(0, ViewGroup.LayoutParams.WRAP_CONTENT, 1f),
@@ -2669,12 +3269,12 @@ class MainActivity : Activity() {
                     imageLoader.load(h.cover, dp(120), dp(170)) { bmp ->
                         if (poster.tag == h.cover) poster.setImageBitmap(bmp)
                     }
-                    cell.setOnClickListener { play(h.playUrl, h.title) }
+                    cell.setOnClickListener { playHistory(h) }
                     return cell
                 }
             }
             grid.setOnItemClickListener { _, _, pos, _ ->
-                items2.getOrNull(pos)?.let { play(it.playUrl, it.title) }
+                items2.getOrNull(pos)?.let { playHistory(it) }
             }
             grid.setOnItemLongClickListener { _, _, pos, _ ->
                 prefs.removeHistory(items2[pos].playUrl)
@@ -2693,9 +3293,71 @@ class MainActivity : Activity() {
         return "%d:%02d".format(total / 60, total % 60)
     }
 
+    /**
+     * 详情页外壳：整屏 backdrop + 底部幕布，正文压在幕布上。
+     * 幕布用 scrimBottom 从透明渐变到页面底色 —— 浅色主题下才不会有硬边。
+     */
+    private fun detailRoot(content: View, backdrop: ImageView): View = FrameLayout(this).apply {
+        setBackgroundColor(Theme.BG)
+        addView(backdrop, FrameLayout.LayoutParams(
+            ViewGroup.LayoutParams.MATCH_PARENT, ViewGroup.LayoutParams.MATCH_PARENT))
+        addView(View(this@MainActivity).apply {
+            layoutParams = FrameLayout.LayoutParams(
+                ViewGroup.LayoutParams.MATCH_PARENT, ViewGroup.LayoutParams.MATCH_PARENT)
+            background = Theme.scrimBottom(Theme.BG)
+        })
+        addView(content, FrameLayout.LayoutParams(
+            ViewGroup.LayoutParams.MATCH_PARENT, ViewGroup.LayoutParams.MATCH_PARENT))
+    }
+
     /* ------------------------------------------------------------ 推荐首页 */
 
+    /** M1：合并货架首页。上游的 showRecommend 保留在下面，用 Prefs.shelvesEnabled 切回。 */
+    private fun showShelves() {
+        currentScreen = "shelves"
+        val screen = ShelvesScreen(
+            this,
+            imageLoader,
+            repo,
+            library,
+            onOpenTitle = { doSearch(it.title, it.year) },
+            onMore = { shelf -> openShelf(shelf) },
+            onLibrary = { showLibrary() },
+            nav = listOf(
+                "搜索" to { showHome() },
+                "继续" to { showHistoryCards() },
+                "直播" to { showLive() },
+                "片源" to { showSources() },
+                "设置" to { showSetup() },
+            ),
+        )
+        setScreen(screen.build())
+    }
+
+    /** 我的片单：收藏/想看/在看/看过/弃剧 */
+    private fun showLibrary() {
+        currentScreen = "library"
+        setScreen(
+            LibraryScreen(this, imageLoader, library, onOpenTitle = { doSearch(it.title, it.year) }, onBack = { showShelves() }).build(),
+        )
+    }
+
+    /** 「查看更多」：把这一行的合并结果铺成网格 */
+    private fun openShelf(shelf: Shelf) {
+        currentScreen = "browse"
+        lastShelf = shelf
+        // 立即进页面，由 BrowseScreen 自己按 base 取第一页：
+        // 以前先 await 4 个榜的 fetch 才 setScreen，慢网下「查看更多」像没反应。
+        setScreen(
+            BrowseScreen(this@MainActivity, imageLoader, repo, library, shelf, { showShelves() }) { doSearch(it.title, it.year) }.build(),
+        )
+    }
+
     private fun showRecommend() {
+        if (prefs.shelvesEnabled()) {
+            showShelves()
+            return
+        }
         currentScreen = "recommend"
         if (recommendItems.isEmpty()) {
             loadRecommend()
@@ -2852,13 +3514,13 @@ class MainActivity : Activity() {
                         layoutParams = LinearLayout.LayoutParams(
                             ViewGroup.LayoutParams.MATCH_PARENT, dp(210))
                         scaleType = ImageView.ScaleType.CENTER_CROP
-                        setBackgroundColor(Color.parseColor("#1a2233"))
+                        setBackgroundColor(Theme.POSTER_BG)
                     },
                 )
                 addView(
                     TextView(this@MainActivity).apply {
                         setTextSize(13f)
-                        setTextColor(Color.parseColor("#e5e7eb"))
+                        setTextColor(Theme.INK)
                         maxLines = 2
                         setPadding(0, dp(6), 0, 0)
                     },
@@ -2885,10 +3547,11 @@ class MainActivity : Activity() {
             override fun getItemId(position: Int) = position.toLong()
             override fun getView(position: Int, convertView: View?, parent: ViewGroup): View {
                 val tv = (convertView as? TextView) ?: TextView(this@MainActivity).apply {
-                    setTextSize(17f)
-                    setPadding(dp(18), dp(12), dp(18), dp(12))
+                    setTextSize(Theme.LIST)
+                    setTextColor(Theme.INK)
+                    setPadding(dp(16), dp(15), dp(16), dp(15))
                     isFocusable = true
-                    isFocusableInTouchMode = true
+                    isFocusableInTouchMode = false
                 }
                 tv.text = items[position]
                 tv.setOnClickListener { onItem(position) }

@@ -162,9 +162,14 @@ class PlayerActivity : Activity() {
         titleText = TextView(this).apply {
             baseText = labelFor(currentIndex)
             setText(baseText)
-            setTextColor(android.graphics.Color.parseColor("#cbd5e1"))
-            setTextSize(14f)
-            setPadding(48, 28, 48, 0)
+            setTextColor(Theme.ON_IMAGE_INK)
+            setTextSize(Theme.TITLE)
+            // 顶部压一层渐变：亮画面上白字会糊掉，这块"幕布"只在显示标题时出现
+            background = android.graphics.drawable.GradientDrawable(
+                android.graphics.drawable.GradientDrawable.Orientation.TOP_BOTTOM,
+                intArrayOf(0xD9000000.toInt(), 0x00000000),
+            )
+            setPadding(dp(48), dp(22), dp(48), dp(26))
             visibility = View.GONE
         }
         root.addView(
@@ -181,7 +186,7 @@ class PlayerActivity : Activity() {
             orientation = LinearLayout.HORIZONTAL
             gravity = Gravity.CENTER_VERTICAL
             setPadding(48, 20, 48, 20)
-            setBackgroundColor(0xB3000000.toInt())
+            setBackgroundColor(Theme.PLAYER_BAR)
             visibility = View.GONE
         }
         playPauseIcon = ImageView(this).apply {
@@ -193,9 +198,9 @@ class PlayerActivity : Activity() {
             layoutParams = LinearLayout.LayoutParams(0, LinearLayout.LayoutParams.WRAP_CONTENT, 1f)
         }
         timeText = TextView(this).apply {
-            setTextColor(android.graphics.Color.WHITE)
-            setTextSize(14f)
-            setPadding(24, 0, 0, 0)
+            setTextColor(Theme.ON_IMAGE_INK)
+            setTextSize(Theme.CAPTION)
+            setPadding(dp(24), 0, 0, 0)
         }
         progressRow.addView(
             playPauseIcon,
@@ -217,19 +222,19 @@ class PlayerActivity : Activity() {
 
         // 底部操作栏（默认隐藏）
         actionBar = LinearLayout(this).apply { orientation = LinearLayout.HORIZONTAL }
-        actionBar.addView(actionButton("下集") {
-            if (player?.hasNextMediaItem() == true) {
-                player?.seekToNextMediaItem()
-            } else {
-                toast("已是最后一集")
-            }
-            showActions()
-        })
         actionBar.addView(actionButton("上集") {
             if (player?.hasPreviousMediaItem() == true) {
                 player?.seekToPreviousMediaItem()
             } else {
                 toast("已是第一集")
+            }
+            showActions()
+        })
+        actionBar.addView(actionButton("下集") {
+            if (player?.hasNextMediaItem() == true) {
+                player?.seekToNextMediaItem()
+            } else {
+                toast("已是最后一集")
             }
             showActions()
         })
@@ -270,14 +275,14 @@ class PlayerActivity : Activity() {
         // 缓冲提示 + 网速
         bufferingText = TextView(this).apply {
             setText("缓冲中…")
-            setTextColor(android.graphics.Color.parseColor("#cbd5e1"))
-            setTextSize(18f)
+            setTextColor(Theme.ON_IMAGE_INK)
+            setTextSize(Theme.TITLE)
             visibility = View.VISIBLE
         }
         speedText = TextView(this).apply {
             setText("测速中…")
-            setTextColor(android.graphics.Color.parseColor("#94a3b8"))
-            setTextSize(13f)
+            setTextColor(Theme.ON_IMAGE_MUTED)
+            setTextSize(Theme.CAPTION)
             setPadding(0, dp(6), 0, 0)
             visibility = View.VISIBLE
         }
@@ -338,7 +343,7 @@ class PlayerActivity : Activity() {
                         baseText = labelFor(currentIndex)
                         if (!hasError) {
                             titleText.text = baseText
-                            titleText.setTextColor(android.graphics.Color.parseColor("#cbd5e1"))
+                            titleText.setTextColor(Theme.ON_IMAGE_INK)
                         }
                         bufferingText.visibility = View.VISIBLE
                         updateChrome()
@@ -370,15 +375,18 @@ class PlayerActivity : Activity() {
                     }
 
                     override fun onPlayerError(error: PlaybackException) {
+                        // 「换源」只在真的带着备选地址进来时才存在（整季播放传的是集数，不是源）。
+                        // 这里给一个用户按得到的事实说明，别让他对着「按返回键换源」按不出东西。
+                        val hint = if (urls.size > 1) "按返回键回上一页换一集/换源" else "按返回键退出后重新搜索"
                         val msg = if (error.errorCodeName.contains("DECODER", true)) {
-                            "解码失败：这个片源可能是 H.265 / 不支持的编码 · 按返回键换源"
+                            "解码失败：这个片源可能是 H.265 / 不支持的编码 · $hint"
                         } else {
-                            "播放失败：${error.errorCodeName} · 按返回键换源"
+                            "播放失败：${error.errorCodeName} · $hint"
                         }
                         hasError = true
                         baseText = msg
                         titleText.text = msg
-                        titleText.setTextColor(android.graphics.Color.parseColor("#fca5a5"))
+                        titleText.setTextColor(Theme.DANGER)
                         bufferingText.visibility = View.GONE
                         speedText.visibility = View.GONE
                         updateChrome()
@@ -408,6 +416,10 @@ class PlayerActivity : Activity() {
     /* ------------------------------------------------------------ 显示逻辑 */
 
     private fun dp(v: Int): Int = (v * resources.displayMetrics.density).toInt()
+
+    /** 播放器里的设置弹窗跟随主题；控制条本身不跟随（恒用 onImage 深色玻璃压视频）。 */
+    private fun dlg(): android.app.AlertDialog.Builder =
+        android.app.AlertDialog.Builder(this, if (Theme.isLight) R.style.AppDialogLight else R.style.AppDialogDark)
 
     private fun toast(msg: String) {
         Toast.makeText(this, msg, Toast.LENGTH_SHORT).show()
@@ -445,7 +457,7 @@ class PlayerActivity : Activity() {
         val bmp = android.graphics.Bitmap.createBitmap(size, size, android.graphics.Bitmap.Config.ARGB_8888)
         val c = android.graphics.Canvas(bmp)
         val paint = android.graphics.Paint(android.graphics.Paint.ANTI_ALIAS_FLAG).apply {
-            color = android.graphics.Color.parseColor("#e5e7eb")
+            color = Theme.ON_IMAGE_INK
             style = android.graphics.Paint.Style.FILL
         }
         if (paused) {
@@ -522,20 +534,22 @@ class PlayerActivity : Activity() {
 
     private fun actionButton(label: String, onClick: () -> Unit): TextView = TextView(this).apply {
         text = label
-        setTextColor(0xFFE5E7EB.toInt())
-        setTextSize(14f)
+        setTextColor(Theme.ON_IMAGE_INK)
+        setTextSize(Theme.BODY)
         setPadding(dp(22), dp(12), dp(22), dp(12))
         val normal = android.graphics.drawable.GradientDrawable().apply {
-            setColor(0xFF2B3A52.toInt())
+            setColor(Theme.PLAYER_TRACK)
             cornerRadius = dp(8).toFloat()
         }
+        // 和全站一致：焦点只加亮色描边，不换填充色（蓝底在暗场景里太跳）
         val focused = android.graphics.drawable.GradientDrawable().apply {
-            setColor(0xFF3E7FD4.toInt())
+            setColor(Theme.PLAYER_TRACK)
             cornerRadius = dp(8).toFloat()
+            setStroke(dp(3), Theme.PLAYER_PROGRESS)
         }
         background = normal
         isFocusable = true
-        isFocusableInTouchMode = true
+        isFocusableInTouchMode = false
         setOnFocusChangeListener { v, has -> v.background = if (has) focused else normal }
         setOnClickListener { onClick() }
         val lp = LinearLayout.LayoutParams(
@@ -562,7 +576,7 @@ class PlayerActivity : Activity() {
         val cur = speeds.indexOfFirst {
             kotlin.math.abs(it - (player?.playbackParameters?.speed ?: 1f)) < 0.01f
         }
-        android.app.AlertDialog.Builder(this)
+        dlg()
             .setTitle("播放倍速")
             .setSingleChoiceItems(labels.toTypedArray(), cur.coerceAtLeast(-1)) { d, which ->
                 player?.setPlaybackSpeed(speeds[which])
@@ -577,7 +591,7 @@ class PlayerActivity : Activity() {
 
     private fun showDecodeMenu() {
         val names = arrayOf("自动（推荐）", "强制软解", "强制硬解")
-        android.app.AlertDialog.Builder(this)
+        dlg()
             .setTitle("解码方式（下次打开视频生效）")
             .setSingleChoiceItems(names, prefs.decodeMode.coerceIn(0, 2)) { d, which ->
                 prefs.decodeMode = which
@@ -590,7 +604,7 @@ class PlayerActivity : Activity() {
 
     private fun showAspectMenu() {
         val names = arrayOf("适应屏幕", "裁切铺满", "拉伸铺满")
-        android.app.AlertDialog.Builder(this)
+        dlg()
             .setTitle("显示比例")
             .setSingleChoiceItems(names, aspectMode) { d, which ->
                 aspectMode = which
@@ -623,6 +637,16 @@ class PlayerActivity : Activity() {
     }
 
     /* ------------------------------------------------------------ 进度与退出 */
+
+    /**
+     * 快进/快退步长：跟着「设置 → 播放 → 快进/快退步长」走。
+     * 旧版硬编码 10s/15s，设置项写了却从不生效（审计 P1-7）；长按 = 1.5 倍步长。
+     */
+    private fun seekStep(forward: Boolean, repeat: Boolean): Long {
+        val base = prefs.seekStepSeconds.coerceIn(5, 120) * 1000L
+        val delta = if (repeat) (base * 1.5).toLong() else base
+        return if (forward) delta else -delta
+    }
 
     private fun seekBy(deltaMs: Long) {
         val p = player ?: return
@@ -659,6 +683,8 @@ class PlayerActivity : Activity() {
                         durationMs = p.duration.coerceAtLeast(0L),
                         updatedAt = System.currentTimeMillis(),
                         cover = coverUrl,
+                        urls = urls.toList(),
+                        index = currentIndex,
                     ),
                 )
             }
@@ -729,11 +755,11 @@ class PlayerActivity : Activity() {
                 true
             }
             KeyEvent.KEYCODE_DPAD_RIGHT -> {
-                seekBy(if (event.repeatCount > 0) 15_000L else 10_000L)
+                seekBy(seekStep(forward = true, repeat = event.repeatCount > 0))
                 true
             }
             KeyEvent.KEYCODE_DPAD_LEFT -> {
-                seekBy(if (event.repeatCount > 0) -15_000L else -10_000L)
+                seekBy(seekStep(forward = false, repeat = event.repeatCount > 0))
                 true
             }
             KeyEvent.KEYCODE_MEDIA_FAST_FORWARD -> {
