@@ -21,7 +21,7 @@
 
 ```
 sdk.dir=/Users/11169285/android-sdk
-dpadtv.defaultUrl=http://192.168.0.14:8899
+dpadtv.defaultUrl=http://http://<你的服务器>:8899
 dpadtv.defaultPassword=<LibreTV 密码，见 Keychain: libretv-istoreos>
 ```
 
@@ -39,7 +39,7 @@ dpadtv.defaultPassword=<LibreTV 密码，见 Keychain: libretv-istoreos>
 | `./gradlew assembleDebug` | ✅ BUILD SUCCESSFUL in 1m46s，仅 2 条 deprecated 警告 |
 | 模拟器安装 | ✅ Success（arm64，与电视 armeabi-v7a 无关，本机只验证逻辑与 UI） |
 | 首次启动 | 走完「服务器地址 → 访问密码」两步，地址已由 `local.properties` 预填 |
-| 连接结果 | ✅ 「已连接：http://192.168.0.14:8899 · 已配置 16 个片源」 |
+| 连接结果 | ✅ 「已连接：http://http://<你的服务器>:8899 · 已配置 16 个片源」 |
 | 首页渲染 | ✅ 「豆瓣·热门·电影·第1批，共 48 条」，**海报图正常加载**（说明 UA/Referer 在模拟器同样成立） |
 
 截图：`docs/shots/emu-01-launch.png` … `emu-05-home.png`
@@ -47,6 +47,6 @@ dpadtv.defaultPassword=<LibreTV 密码，见 Keychain: libretv-istoreos>
 ## 注意事项
 
 - 模拟器是 **arm64**，电视是 **armeabi-v7a**：本机验证「逻辑 / UI / 网络契约」，最终仍需在电视上装一次做真机确认。
-- 模拟器访问 `192.168.0.14:8899` 走 NAT 直连局域网，实测通。
+- 模拟器访问 `http://<你的服务器>:8899` 走 NAT 直连局域网，实测通。
 - Gradle 守护进程关掉（`--no-daemon`）更省内存；连续开发可去掉。
 - 签名：debug 用系统默认；release 需自备 keystore（`apksigner`），keystore 放 `~/.hermes/keys/` 不入库。

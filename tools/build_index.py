@@ -6,7 +6,7 @@
 侧车在这个脚本里只是「抓取时用的代理」，不再是运行期依赖。
 
 用法：
-    python3 tools/build_index.py --via http://192.168.0.14:8898   # 走路由器侧车（推荐）
+    python3 tools/build_index.py --via http://<你的服务器>:8898   # 走路由器侧车（推荐）
     python3 tools/build_index.py --direct                          # 直连，慢且容易被风控
     python3 tools/build_index.py --via ... --pages 3               # 每标签只抓 3 页（60 条）
 
@@ -177,7 +177,7 @@ def backfill_years(items: dict[str, list], tags: dict[str, list[str]]) -> dict[s
 
 def main() -> int:
     ap = argparse.ArgumentParser()
-    ap.add_argument("--via", default=None, help="侧车地址，如 http://192.168.0.14:8898")
+    ap.add_argument("--via", default=None, help="侧车地址，如 http://<你的服务器>:8898")
     ap.add_argument("--direct", action="store_true", help="直连豆瓣（不推荐）")
     ap.add_argument("--pages", type=int, default=5, help="每个标签抓几页（20 条/页）")
     ap.add_argument("--gap", type=float, default=0.0, help="请求间隔秒（直连建议 6s）")

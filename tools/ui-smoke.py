@@ -22,8 +22,8 @@ import sys
 import time
 
 ADB = os.environ.get("ADB", os.path.expanduser("~/android-sdk/platform-tools/adb"))
-PKG = "com.dpadtv.client.pro"
-ACT = f"{PKG}/com.dpadtv.client.MainActivity"
+PKG = "io.github.blackkcold.librepro"
+ACT = f"{PKG}/io.github.blackkcold.librepro.MainActivity"
 
 results: list[tuple[bool, str]] = []
 
@@ -153,7 +153,7 @@ def main() -> int:
 
     # 启动后不该有任何豆瓣请求（本地索引优先）
     reqs = dev.sh("logcat", "-d")
-    n_ok = len(re.findall(r"DpadTVDouban.*direct OK", reqs))
+    n_ok = len(re.findall(r"LibreProNet.*direct OK", reqs))
     log(n_ok == 0, "冷启动 0 次联网请求", f"direct OK × {n_ok}")
 
     x = dev.dump()
