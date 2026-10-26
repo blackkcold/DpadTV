@@ -409,3 +409,57 @@ push    origin main / origin feature/collections / origin v1.2.2   （fork: blac
 ## 已知限制（1.2.2）
 
 真机 D-pad 未验；年份覆盖 43.9%；换源后同一部片可能成为另一行（豆瓣 id 缺失时靠源身份）；DB 迁移无回滚。
+
+
+---
+
+# 发版 · Libre Pro 1.3.0（2026-10-26）
+
+## 品牌
+
+| 项 | 旧 | 新 |
+|---|---|---|
+| 应用名 | DpadTV Pro | **Libre Pro** |
+| 包名 / namespace | com.dpadtv.client.pro | **io.github.blackkcold.librepro** |
+| 图标 | 单三角 | 液态玻璃双三角（电光紫 `#8B5CF6→#EC4899`）+ 黄色定制点 |
+| 版本 | 1.2.2 / 104 | **1.3.0 / 105** |
+
+图标资源：adaptive（前景 PNG 66.6% 安全区 + `#0B1220` 背景 + monochrome 层）+ 5 档 mipmap。
+渲染脚本 `tools/icon_final.py`，导出脚本 `tools/render_icon_assets.py`。
+
+## 非官方标注
+
+- 设置页页脚：`Libre Pro v1.3.0 · 非官方版` + 「基于 DpadTV 的定制分支，与上游作者无隶属关系」
+- README 顶部徽标 `unofficial / 非官方` + 免责段落
+- 更新检查指向 `blackkcold/DpadTV`，不会引导安装回上游版本
+
+## 脱敏验收
+
+| 检查 | 结果 |
+|---|---|
+| 发版 APK 内的默认服务器地址 | **0 命中**（`10.0.2.2` / `192.168.0.14` 均无） |
+| 首启界面 | 地址栏为空，需手动填写 —— 模拟器实测通过 |
+| 仓库当前树的内网地址 | 0 命中（docs / 脚本 / README 全部替换为占位符） |
+| 历史提交 | 未重写（按决策保留，仅保证新增内容不含） |
+
+## 截图
+
+用 `tools/mock_libretv.py`（本地最小 LibreTV 兼容服务）拍摄，**不含任何真实地址或片源名**：
+首页 / 浏览 / 搜索 / 设置 四张已入 README；详情与结果页因触摸焦点问题未能自动拍摄，留待补。
+
+## 发版动作
+
+```
+commit  bd969a6  feat(1.3.0): Libre Pro 品牌化 —— 换名/换图标/换包名，发版脱敏
+merge   82faa96  feature/collections → main（--no-ff，README 冲突取新版）
+tag     v1.3.0
+push    origin main / origin feature/collections / origin v1.3.0
+```
+
+产物：`dist/LibrePro-1.3.0.apk`（6,540,052 B，com.dpadtv.* 已全部退役）
+
+## 未完成
+
+- 详情页 / 结果页 README 截图
+- 1.3.0 的 22 项冒烟未重跑（当前网络无法访问家庭服务器，需连 mock 或回家再跑）
+- 真机 D-pad 验收
