@@ -24,14 +24,16 @@ jobs:
           distribution: temurin
           java-version: "21"
 
+      # 不用 android-actions/setup-android@v3：它在当前 runner 镜像上会因
+      # "Failed to find package 'tools'" 直接失败。runner 本身自带 SDK，直接用它。
       - name: Android SDK
-        uses: android-actions/setup-android@v3
-
-      - name: 安装 compileSdk 平台
         run: |
-          yes | sdkmanager --licenses > /dev/null || true
-          sdkmanager "platforms;android-37" "build-tools;37.0.0" || \
-            sdkmanager "platforms;android-36" "build-tools;36.0.0"
+          echo "ANDROID_HOME=${ANDROID_SDK_ROOT:-/usr/local/lib/android/sdk}" >> "$GITHUB_ENV"
+          echo "ANDROID_SDK_ROOT=${ANDROID_SDK_ROOT:-/usr/local/lib/android/sdk}" >> "$GITHUB_ENV"
+          yes | sdkmanager --licenses > /dev/null 2>&1 || true
+          sdkmanager --install "platforms;android-37" "build-tools;37.0.0" > /dev/null 2>&1 || \
+            sdkmanager --install "platforms;android-36" "build-tools;36.0.0" > /dev/null 2>&1 || true
+          sdkmanager --list_installed | grep -E "platforms;android-3[6-9]|build-tools;3[6-9]" | head -5
 
       # CI 里没有 local.properties / signing.properties，走的是「无签名 + 无凭据」路径；
       # verifyNoSecrets 仍然会断言 APK 内没有任何内网地址字面量，且封条必须是 seal:public
