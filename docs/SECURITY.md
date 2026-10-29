@@ -38,9 +38,16 @@ CI 在 tag 推送时复跑同样的检查（`.github/workflows/verify-release.ym
 | 发行 keystore | `~/.hermes/keys/librepro-release.jks` | 600 | ❌（仓库外） |
 | 口令副本 | `~/.hermes/keys/librepro-release.pass` | 600 | ❌（仓库外） |
 
-> 建议把 keystore 与口令也存进 1Password（`API Credential` 类型，字段：`keystore` / `storePassword` /
-> `keyAlias` / `keyPassword`）。当前 1Password Service Account 对目标 Vault 只有读权限，
-> 因此写入需要人工在桌面端完成。
+keystore 与口令已存入 1Password：`AgentKey Vault` → 「Libre Pro 发行签名 (librepro-release.jks)」，
+`API Credential` 类型，字段 `keystore` / `storePassword` / `keyAlias` / `keyPassword`。
+取回方式：
+
+```bash
+op read "op://AgentKey Vault/Libre Pro 发行签名 (librepro-release.jks)/storePassword"
+```
+
+> 注意：Service Account 对该 Vault 是只读的，写入要用**桌面 App 的已登录会话**
+> （`env -u OP_SERVICE_ACCOUNT_TOKEN op item create ...`）。
 
 ## 发行包不做什么
 
