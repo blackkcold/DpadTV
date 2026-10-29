@@ -22,3 +22,14 @@ docs/adb-*.png
 Thumbs.db
 # 本地走查截图（87MB，不入库）
 docs/shots/
+
+# 签名与密钥（绝不入库）
+signing.properties
+keystore.properties
+*.jks
+*.keystore
+*.p12
+keys/
+
+# 私有配置
+local.properties

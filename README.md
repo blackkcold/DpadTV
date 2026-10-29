@@ -9,7 +9,7 @@
 [![Kotlin](https://img.shields.io/badge/Kotlin-2.x-7F52FF?logo=kotlin&logoColor=white)](https://kotlinlang.org)
 [![Android](https://img.shields.io/badge/Android-6.0%2B-3DDC84?logo=android&logoColor=white)](https://developer.android.com)
 [![minSdk](https://img.shields.io/badge/minSdk-23-3DDC84)](#)
-[![Version](https://img.shields.io/badge/version-1.3.0-8B5CF6)](#)
+[![Version](https://img.shields.io/badge/version-1.3.1-8B5CF6)](#)
 [![Unofficial](https://img.shields.io/badge/unofficial-%E9%9D%9E%E5%AE%98%E6%96%B9-F59E0B)](#免责声明)
 [![License](https://img.shields.io/badge/license-GPL--3.0-blue)](LICENSE)
 
@@ -118,19 +118,33 @@ adb install -r LibrePro-1.3.0.apk
 
 ## 构建
 
+凭据是否内置，由**构建类型**决定，不由命令行开关决定 —— 这样“忘了加参数”也不会把服务器地址发出去。
+
 ```bash
-# JDK 17+；local.properties 只写 SDK 路径即可，不要提交
+# JDK 17+；local.properties 只需 SDK 路径即可参与编译
 echo "sdk.dir=/path/to/android-sdk" > local.properties
 
-./gradlew :app:assembleDebug                                  # 开发包（带「测试版」字样）
-./gradlew :app:assembleDebug -Pdpadtv.release=true            # 发版包（不内置任何服务器配置）
-./gradlew :app:assembleDebug -Pdpadtv.bakeDefaults=true       # 自用包（允许注入本机默认地址）
+./gradlew :app:assembleDebug      # 自用包：注入本机地址与密码（读 local.properties），装完即连
+./gradlew :app:assembleRelease    # 发行包：DEFAULT_URL / DEFAULT_PASSWORD 恒为空，且构建期自检
+```
+
+| 构建类型 | 凭据 | debuggable | 签名 | 渠道封条 |
+|---|---|---|---|---|
+| `debug` | 注入 `local.properties` 的值 | true | debug keystore | `seal:private` |
+| `release` | **恒空**，代码里没有读取分支 | false | 专用 keystore | `seal:public` |
+
+自用包想换地址：在 `local.properties`（**不入库**）写 `dpadtv.defaultUrl` / `dpadtv.defaultPassword`，
+或命令行覆盖 `-Pdpadtv.defaultUrl=` / `-Pdpadtv.defaultPassword=`。
+
+发行包构建会自动跑 `verifyNoSecrets`：解压 APK 扫描真实地址/密码与内网 URL 字面量，
+命中任何一项直接构建失败。**唯一允许上传的产物由脚本产出**：
+
+```bash
+./tools/release.sh    # → dist/LibrePro-<ver>-public.apk + .sha256 + build-info.json
 ```
 
 可选参数：`-Pdpadtv.packageId=` 换包名，`-Pdpadtv.appName=` 换桌面名称。
-
-> 想把自己常用的地址写进包：在 `local.properties`（**不入库**）加 `dpadtv.defaultUrl` / `dpadtv.defaultPassword`，
-> 并且必须显式加 `-Pdpadtv.bakeDefaults=true`。发版构建一律忽略这两个值。
+`-Pdpadtv.forcePrivate=true` 可让 release 包注入凭据，**仅供本机排查**，闸门会拒绝它。
 
 ### 测试
 

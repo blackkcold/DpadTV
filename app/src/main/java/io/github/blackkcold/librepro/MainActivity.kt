@@ -665,19 +665,18 @@ class MainActivity : Activity() {
                 })
             }
             // 输入框不放大：放大后它会比父容器宽出 46px，实测会导致聚焦状态首字符渲染异常
+            setOnClickListener {
+                (getSystemService(INPUT_METHOD_SERVICE) as? InputMethodManager)
+                    ?.showSoftInput(this, InputMethodManager.SHOW_IMPLICIT)
+            }
             applyFocusStyle(
                 view = this,
                 normalBg = Theme.GLASS_2,
                 focusedBg = Theme.GLASS_2,
                 focusScale = 1f,
-                onFocusChanged = { hasFocus ->
-                    if (hasFocus) {
-                        postDelayed({
-                            (getSystemService(INPUT_METHOD_SERVICE) as? InputMethodManager)
-                                ?.showSoftInput(this, InputMethodManager.SHOW_IMPLICIT)
-                        }, 120)
-                    }
-                },
+                // 不在获焦时弹软键盘：电视没有键盘，弹了只会把 IME 拉起来；
+                // 模拟器/触屏上由用户点一下再弹（曾因 IME 服务无响应导致主线程 ANR）。
+                onFocusChanged = { _ -> },
             )
         }
 
@@ -1162,8 +1161,10 @@ class MainActivity : Activity() {
         val hasNew = UpdateChecker.isNewer(latest, BuildConfig.VERSION_NAME)
         val devTag = if (BuildConfig.TEST_BUILD) "（测试版）" else ""
         // 非官方分支：名字、仓库、免责三件事都要和上游区分开，避免用户找错人
-        val head = BuildConfig.APP_NAME + " v" + BuildConfig.VERSION_NAME + devTag +
-            "  ·  非官方版" + if (hasNew) "  •  有新版本 $latest" else ""
+        // 渠道标识：私有包显示「自用构建」，一眼能认出它带本机配置，不能对外分发
+        val channelTag = if (BuildConfig.CHANNEL == "private") "  ·  自用构建" else "  ·  非官方版"
+        val head = BuildConfig.APP_NAME + " v" + BuildConfig.VERSION_NAME + devTag + channelTag +
+            if (hasNew) "  •  有新版本 $latest" else ""
         val tail = "\n基于 DpadTV 的定制分支  ·  github.com/blackkcold/DpadTV\n" +
             "与上游作者无隶属关系；本应用仅为聚合客户端，不提供、不存储任何音视频内容，" +
             "所有内容均来自用户自行配置的第三方接口。"
@@ -1620,7 +1621,8 @@ class MainActivity : Activity() {
 
         val urlField = field(BuildConfig.DEFAULT_URL, prefs.serverUrl.ifEmpty { BuildConfig.DEFAULT_URL })
         col.addView(urlField)
-        val pwdField = field("访问密码", prefs.password, password = true)
+        // 密码默认值同样来自构建参数：自用包可以预填，发版包为空（DEFAULT_PASSWORD 恒空）
+        val pwdField = field("访问密码", prefs.password.ifEmpty { BuildConfig.DEFAULT_PASSWORD }, password = true)
         col.addView(pwdField)
 
         val statusLine = TextView(this).apply {
@@ -1634,7 +1636,7 @@ class MainActivity : Activity() {
         val bar = LinearLayout(this).apply { orientation = LinearLayout.HORIZONTAL }
         bar.addView(button("连接并登录", primary = true) {
             val url = urlField.text.toString().trim()
-            val pwd = pwdField.text.toString()
+            val pwd = pwdField.text.toString().ifEmpty { BuildConfig.DEFAULT_PASSWORD }
             if (url.isEmpty()) {
                 toast("请填服务器地址")
                 return@button

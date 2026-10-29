@@ -463,3 +463,28 @@ push    origin main / origin feature/collections / origin v1.3.0
 - 详情页 / 结果页 README 截图
 - 1.3.0 的 22 项冒烟未重跑（当前网络无法访问家庭服务器，需连 mock 或回家再跑）
 - 真机 D-pad 验收
+
+## 1.3.1（2026-10-29）—— 构建体系重构：默认自用、发行强制脱敏
+
+问题：旧设计用 `-Pdpadtv.release=true` 同时控制「去测试版字样」和「剥凭据」，是 fail-open ——
+忘加一次参数就会把本机服务器地址与密码打进发行包；产物靠手工 `cp`，无指纹、无渠道标记；
+发行包本身还是 `debuggable=true` + debug 签名。
+
+改造：
+
+| 项 | 之前 | 现在 |
+|---|---|---|
+| 凭据注入 | 命令行开关决定（默认注入，发版需记得关） | **构建类型决定**：debug 注入 / release 恒空 |
+| 构建自检 | 无（人工 unzip+grep） | `verifyNoSecrets` 自动跑，命中即构建失败 |
+| 产物 | 手工 `cp app-debug.apk` | `tools/release.sh` → `dist/LibrePro-<ver>-public.apk` + `.sha256` + `build-info.json` |
+| 渠道标识 | 只有 `TEST_BUILD` | `CHANNEL` + DEX 封条 `seal:public` / `seal:private` |
+| 签名 | Android Debug 证书 | 独立 4096-bit RSA，`CN=Libre Pro`，有效期 30 年，keystore 在仓库外 |
+| debuggable | true | release 为 false |
+| CI | 无 | tag 推送时复跑同一套检查 |
+
+实测：
+
+- `assembleDebug` → APK 内 `url=1 pwd=1 seal_private=1`（自用包，装电视即连）
+- `assembleRelease` → `url=0 pwd=0 seal_public=1`，`versionCode 106 / versionName 1.3.1`
+- 负向：`assembleRelease -Pdpadtv.forcePrivate=true` → **构建失败**，报「服务器地址 / 服务器主机 / 访问密码 命中于 classes.dex」
+- 单测 61/61，闸门误报修正一次（`startsWith("192.168.")` 是挑选本机 IP 的正常逻辑，不当作泄露）

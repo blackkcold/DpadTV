@@ -1,0 +1,72 @@
+name: verify-release
+
+# 发行包的第三方复核：任何人（包括 CI）都能确认 tag 上的 APK 不含本机配置。
+# 本地还有一道同样的闸门（./gradlew assembleRelease 会自动跑 verifyNoSecrets），
+# 这里是第二道，防止“本机改了闸门再发版”。
+on:
+  push:
+    tags: ["v*"]
+  workflow_dispatch:
+
+permissions:
+  contents: read
+
+jobs:
+  verify:
+    runs-on: ubuntu-latest
+    timeout-minutes: 30
+    steps:
+      - uses: actions/checkout@v4
+
+      - name: JDK 21
+        uses: actions/setup-java@v4
+        with:
+          distribution: temurin
+          java-version: "21"
+
+      - name: Android SDK
+        uses: android-actions/setup-android@v3
+
+      - name: 安装 compileSdk 平台
+        run: |
+          yes | sdkmanager --licenses > /dev/null || true
+          sdkmanager "platforms;android-37" "build-tools;37.0.0" || \
+            sdkmanager "platforms;android-36" "build-tools;36.0.0"
+
+      # CI 里没有 local.properties / signing.properties，走的是「无签名 + 无凭据」路径；
+      # verifyNoSecrets 仍然会断言 APK 内没有任何内网地址字面量，且封条必须是 seal:public
+      - name: 构建并自检
+        run: ./gradlew :app:assembleRelease --no-daemon --stacktrace
+
+      - name: 额外字符串扫描（不依赖 Gradle 任务）
+        run: |
+          APK=$(ls app/build/outputs/apk/release/*.apk | head -1)
+          echo "APK=$APK ($(wc -c < "$APK") B)"
+          python3 - "$APK" <<'PY'
+          import sys, zipfile
+          apk = sys.argv[1]
+          bad = ("http://192.168.", "https://192.168.", "http://10.",
+                 "http://127.0.0.1:8899", "seal:private")
+          hits = []
+          with zipfile.ZipFile(apk) as z:
+              for n in z.namelist():
+                  if not (n.endswith((".dex", ".arsc")) or n.startswith(("res/", "assets/"))):
+                      continue
+                  b = z.read(n)
+                  for t in bad:
+                      if t.encode() in b:
+                          hits.append(f"{t} @ {n}")
+              dex = b"".join(z.read(n) for n in z.namelist() if n.endswith(".dex"))
+          if b"seal:public" not in dex:
+              hits.append("缺少 seal:public 封条")
+          if hits:
+              print("✗ " + "\n  ".join(hits)); sys.exit(1)
+          print("✓ CI 自检通过：无内网地址、封条 seal:public")
+          PY
+
+      - name: 保留产物供人工核对
+        uses: actions/upload-artifact@v4
+        with:
+          name: release-apk-${{ github.ref_name }}
+          path: app/build/outputs/apk/release/*.apk
+          retention-days: 14

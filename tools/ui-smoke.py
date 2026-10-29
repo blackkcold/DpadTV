@@ -51,9 +51,28 @@ class Dev:
             time.sleep(gap)
 
     def dump(self) -> str:
+        # 每轮先删掉设备上的旧 xml：dump 超时后如果直接 pull，会把**上一屏**当成
+        # 当前屏，坐标全部错位（实测表现为「点了设置，屏幕还在首页」）。拿不到新
+        # 内容就返回空串，让调用方重试，绝不回退到旧屏。
         for _ in range(3):
-            self.sh("shell", "uiautomator", "dump", "/sdcard/ui.xml")
-            self.sh("pull", "/sdcard/ui.xml", "/tmp/dpadtv-ui.xml")
+            self.sh("shell", "rm", "-f", "/sdcard/ui.xml")
+            try:
+                self.sh("shell", "uiautomator", "dump", "/sdcard/ui.xml", timeout=45)
+            except subprocess.TimeoutExpired:
+                # 高负载时 dump 会卡住；残留的 uiautomator 进程会让下一次 dump 直接
+                # 抛 "UiAutomationService already registered"，所以先清进程再重试
+                self.sh("shell", "pkill", "-f", "uiautomator")
+                time.sleep(3)
+                continue
+            try:
+                os.remove("/tmp/dpadtv-ui.xml")   # 本地旧副本也清掉，避免 pull 失败后读旧的
+            except FileNotFoundError:
+                pass
+            try:
+                self.sh("pull", "/sdcard/ui.xml", "/tmp/dpadtv-ui.xml", timeout=20)
+            except subprocess.TimeoutExpired:
+                time.sleep(2)
+                continue
             try:
                 x = open("/tmp/dpadtv-ui.xml", encoding="utf-8", errors="ignore").read()
             except FileNotFoundError:
@@ -114,10 +133,45 @@ class Dev:
 
 
 
+def dismiss_system_dialogs(dev: Dev) -> None:
+    """关掉系统级 ANR 弹窗（System UI / 其他进程），否则它会一直挡在最上层。"""
+    for _ in range(3):
+        x = dev.dump()
+        txt = dev.texts(x)
+        if not any("isn't responding" in t or "无响应" in t for t in txt):
+            return
+        if not (dev.tap_text("Wait", 1.5) or dev.tap_text("等待", 1.5)):
+            return
+
+
+def ensure_connected(dev: Dev, tries: int = 3) -> bool:
+    """安装/清数据后停在「服务器设置」页时，自动点一次「连接并登录」。
+
+    用 -Pdpadtv.bakeDefaults=true 构建的包地址已预填，只需点按钮；
+    发版包（地址为空）跑冒烟时会失败——这是预期，脱敏优先。
+    """
+    for _ in range(tries):
+        x = dev.dump()
+        txt = dev.texts(x)
+        if any("连接并登录" in t for t in txt):
+            if not dev.tap_text("连接并登录", 1):
+                return False
+            if dev.wait_text("我的片单", 25) or dev.wait_text("电影", 6):
+                time.sleep(2.0)
+                return True
+        elif any("我的片单" in t or "继续" in t or "已连接" in t or "服务器与片源" in t for t in txt):
+            # 连接成功后会停在设置页，也算就绪；首页由 relaunch 之后的方向键操作覆盖
+            return True
+        time.sleep(1.5)
+    return False
+
+
 def relaunch(dev: Dev, wait: float = 6.0) -> None:
     dev.sh("shell", "am", "force-stop", PKG)
     dev.sh("shell", "am", "start", "-n", ACT)
     time.sleep(wait)
+    dismiss_system_dialogs(dev)
+    ensure_connected(dev)
 
 def goto_more(dev: Dev, tries: int = 10) -> bool:
     """从首页用 D-pad 走到某一行的「查看更多 ›」并按下。"""
@@ -150,6 +204,8 @@ def main() -> int:
     dev.sh("logcat", "-c")
     dev.sh("shell", "am", "start", "-n", ACT)
     time.sleep(6)
+    dismiss_system_dialogs(dev)
+    log(ensure_connected(dev), "首启登录", str(dev.texts(dev.dump())[:4]))
 
     # 启动后不该有任何豆瓣请求（本地索引优先）
     reqs = dev.sh("logcat", "-d")
@@ -204,39 +260,54 @@ def main() -> int:
     log(dev.wait_text("查看更多", 6), "BACK 回到首页")
 
     # ---------- 海报 → 搜索 → 详情 ----------
-    x = dev.dump()
-    poster = next((t for t in dev.texts(x) if "★" in t), "")
+    # 走遥控器真实路径：搜索页 → 方向键到热门词 → OK
+    # （触摸点海报只会聚焦不触发，是焦点模型的既有取舍，改用 D-pad 才代表电视用法）
     ok = False
-    if poster and dev.tap_text(poster, 1):
-        ok = dev.wait_text("条结果", 30)
-    log(ok, "海报 → 搜索结果页", f"{poster} → " + str(dev.texts(dev.dump())[:3]))
+    poster = ""
+    if dev.tap_text("搜索", 3):
+        for _ in range(12):
+            dev.key("KEYCODE_DPAD_DOWN")
+            time.sleep(0.4)
+            t, _ = dev.focused(dev.dump())
+            if t and len(t) > 1 and "搜索" not in t and "清空" not in t and "片源" not in t:
+                poster = t
+                break
+        if poster:
+            dev.key("KEYCODE_DPAD_CENTER")
+            ok = dev.wait_text("条结果", 30)
+    log(ok, "热门词 → 搜索结果页", f"{poster} → " + str(dev.texts(dev.dump())[:3]))
     if ok:
         # 结果卡子项不聚焦：直接点第一张卡片
         x = dev.dump()
-        card = next((t for t in dev.texts(x) if t and t not in ("▶", "DpadTV Pro")
+        card = next((t for t in dev.texts(x) if t and t not in ("▶", "Libre Pro", "LibrePro")
                      and "结果" not in t and "来源筛选" not in t and "返回" not in t), "")
         if card and dev.tap_text(card, 1) and dev.wait_text("选集", 25):
             txt = dev.texts(dev.dump())
             log(True, "结果卡 → 详情页", str(txt[:6]))
             dev.shot("05-detail")
-            x = dev.dump()
-            title = next((v for v in txt if v and v not in ("▶", "DpadTV Pro", "‹ 返回", "长按片名可加入片单")
-                          and "选集" not in v and "播放" not in v and "加入片单" not in v), "")
-            p = dev.center(x, title) if title else None
-            if p:
-                dev.sh("shell", "input", "swipe", str(p[0]), str(p[1]), str(p[0]), str(p[1]), "900")
-                time.sleep(1.5)
-                menu = dev.texts(dev.dump())
-                log(all(k in menu for k in ("想看", "在看", "看过", "收藏", "弃剧")),
-                    "长按片名 → 片单菜单", str(menu[:8]))
-                dev.shot("06-longpress")
-                dev.key("KEYCODE_BACK")
+            # 长按要用遥控器语义（按住 OK）：触摸滑动模拟不出长按，
+            # 焦点先在片名上（详情页首个可聚焦项就是片名）
+            for _ in range(6):
+                t, _ = dev.focused(dev.dump())
+                if t and "返回" not in t and "长按" not in t and len(t) > 1:
+                    break
+                dev.key("KEYCODE_DPAD_DOWN")
+                time.sleep(0.5)
+            dev.sh("shell", "input", "keyevent", "--longpress", "KEYCODE_DPAD_CENTER")
+            time.sleep(2)
+            menu = dev.texts(dev.dump())
+            log(all(k in menu for k in ("想看", "在看", "看过", "收藏", "弃剧")),
+                "长按片名 → 片单菜单", str(menu[:8]))
+            dev.shot("06-longpress")
+            # 顺手加进「想看」，让后面的片单页有数据可验
+            dev.key("KEYCODE_DPAD_CENTER")
+            time.sleep(2)
         else:
             log(False, "结果卡 → 详情页", f"{card} → " + str(dev.texts(dev.dump())[:5]))
 
     # ---------- 稳定性 ----------
     logc = dev.sh("logcat", "-d")
-    fatal = re.findall(r"FATAL EXCEPTION|ANR in com\.dpadtv", logc)
+    fatal = re.findall(r"FATAL EXCEPTION|ANR in io\.github", logc)
     log(not fatal, "无崩溃 / ANR", str(set(fatal)))
 
     # ---------- 片单 / 设置 / 片源 ----------
