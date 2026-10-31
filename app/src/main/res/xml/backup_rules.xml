@@ -1,0 +1,5 @@
+<?xml version="1.0" encoding="utf-8"?>
+<!-- Android 11 及以下的备份排除规则；语义同 data_extraction_rules.xml -->
+<full-backup-content>
+    <exclude domain="sharedpref" path="dpadtv_native.xml" />
+</full-backup-content>

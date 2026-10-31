@@ -31,9 +31,39 @@ class Prefs(ctx: Context) {
         get() = sp.getString("password", "") ?: ""
         set(v) = sp.edit().putString("password", v).apply()
 
+    /**
+     * 会话 Cookie **按服务器 origin 分开存**。
+     *
+     * 以前只有一个裸键：设置页把地址换成 B 之后仍然 `restoreCookie(旧值)`，
+     * 于是 A 的会话被原样发给 B（`Api.open()` 会把它加到每个请求上）。
+     * 现在键里带 origin，换地址就读不到对方的 Cookie。
+     */
+    private fun originOf(url: String): String = url.trim().trimEnd('/').lowercase()
+
+    fun cookieFor(url: String): String = sp.getString("cookie:" + originOf(url), "") ?: ""
+
+    fun setCookieFor(url: String, value: String) {
+        val key = "cookie:" + originOf(url)
+        if (value.isEmpty()) sp.edit().remove(key).apply()
+        else sp.edit().putString(key, value).apply()
+    }
+
+    /** 当前服务器的会话；写入时落到当前服务器名下 */
     var cookie: String
-        get() = sp.getString("cookie", "") ?: ""
-        set(v) = sp.edit().putString("cookie", v).apply()
+        get() = if (serverUrl.isEmpty()) "" else cookieFor(serverUrl)
+        set(v) {
+            if (serverUrl.isNotEmpty()) setCookieFor(serverUrl, v)
+        }
+
+    init {
+        // 老版本只有裸 "cookie"：迁到当前服务器名下，然后删掉旧键（避免跨服务器复用）
+        val legacy = sp.getString("cookie", null)
+        if (legacy != null) {
+            val u = sp.getString("server_url", "") ?: ""
+            if (u.isNotEmpty() && legacy.isNotEmpty()) setCookieFor(u, legacy)
+            sp.edit().remove("cookie").apply()
+        }
+    }
 
     /** 首页用合并货架（M1+）。关掉则退回上游的"单榜单海报墙"，便于对比与回滚。 */
     fun shelvesEnabled(): Boolean = sp.getBoolean("shelves_enabled", true)

@@ -87,6 +87,7 @@ class LocalIndex(ctx: Context) {
         minRate: Double = 0.0,
         start: Int = 0,
         size: Int = 24,
+        sort: Sort = Sort.RATING,
     ): List<MovieItem> {
         ensureLoaded()
         if (!available) return emptyList()
@@ -94,7 +95,7 @@ class LocalIndex(ctx: Context) {
         // 条目的 year 字段只覆盖被年份组合抓到的部分（实测 453/1601），
         // 单看字段会让带年份的查询大面积落空。
         val yearIds = year?.takeIf { it.isNotEmpty() }?.let { idsByTag[it]?.toSet() }
-        return IndexCore.query(idsByTag, itemsById, tags, year, minRate, start, size, yearIds)
+        return IndexCore.query(idsByTag, itemsById, tags, year, minRate, start, size, yearIds, sort)
     }
 
     /** 这个标签在索引里有多少条：用来判断「本地够不够，不够再联网」 */
@@ -148,6 +149,7 @@ object IndexCore {
         start: Int,
         size: Int,
         yearIds: Set<String>? = null,
+        sort: Sort = Sort.RATING,
     ): List<MovieItem> {
         // 没有标签 = 一次「全部条目」查询。索引给不出有意义的排序，
         // 直接交回调用方走网络，别把 1600 条全库当成一次命中（旧版定时炸弹）。
@@ -174,11 +176,29 @@ object IndexCore {
                     item.title.contains(year) ||
                     yearIds?.contains(id) == true
             }
-            .sortedByDescending { it.second.rating }
+            .sortedWith(ordering(sort))
             .map { it.second }
             .toList()
         if (start <= 0 && size >= filtered.size) return filtered
         if (start >= filtered.size) return emptyList()
         return filtered.subList(start, minOf(start + size, filtered.size))
+    }
+
+    /**
+     * 排序：**必须全序**（每个分支都拿片名兜底），否则翻页时同分条目的相对顺序
+     * 可能变，第 2 页会和第 1 页重叠或漏项。
+     *
+     *  · RATING  评分降序（用户预期最直接）
+     *  · HOT     按 id 稳定哈希打散 —— 索引没有热度维度，但至少和「9 分+」不重样
+     *  · LATEST  年份降序（空年份排最后）→ 评分降序
+     */
+    private fun ordering(sort: Sort): Comparator<Pair<String, MovieItem>> = when (sort) {
+        Sort.RATING -> compareByDescending<Pair<String, MovieItem>> { it.second.rating }
+            .thenBy { it.second.title }
+        Sort.HOT -> compareBy<Pair<String, MovieItem>> { it.first.hashCode() }
+            .thenBy { it.second.title }
+        Sort.LATEST -> compareByDescending<Pair<String, MovieItem>> { it.second.year }
+            .thenByDescending { it.second.rating }
+            .thenBy { it.second.title }
     }
 }

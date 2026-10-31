@@ -11,6 +11,11 @@ import android.widget.LinearLayout
 import android.widget.TextView
 
 /**
+ * 网格规格：列数 / 海报宽高 / 间隙。由 [Theme.gridSpec] 按屏宽算出。
+ */
+data class GridSpec(val columns: Int, val posterW: Int, val posterH: Int, val gap: Int)
+
+/**
  * 唯一的设计令牌来源（Aerial 视觉方向 + 深/浅双极性）。
  *
  * 为什么要有它：M1–M4 的屏幕是分批写的，字号在 12f / 12.5f / 13.5f / 15f / 16f / 18f 之间飘，
@@ -186,10 +191,31 @@ object Theme {
     const val RADIUS_L = 12
     const val POSTER_W = 146
     const val POSTER_H = 204
+    const val POSTER_RATIO = 1.4f      // 豆瓣海报 ≈ 1:1.4，改高不改宽
     const val FOCUS_SCALE = 1.05f     // 电视上位移会抖，只放大 5%
     const val FOCUS_STROKE = 3
     const val ANIM = 160L             // 所有交互动效统一 160ms
     const val HERO_ANIM = 220L        // hero 换图是氛围动效，允许长一点
+
+    /**
+     * 网格规格：**按屏宽算**列数与海报宽，不写死列数。
+     *
+     * 为什么必须算：Android TV 1080p 的标准密度是 320dpi → 屏宽只有 **960dp**，
+     * 固定 6 列 × (146+12)dp + 96dp 边距 = 1032dp 已经溢出，海报会被裁掉一条边
+     * （320dpi 模拟器截图实测：海报 120dp 宽但内容按 146dp 铺，右侧被切）。
+     * 720p（1280dp 宽）同样会留下大片空白。这里统一成「能放几个放几个，宽度均分」。
+     */
+    fun gridSpec(
+        screenWidthDp: Int,
+        minPosterW: Int = POSTER_W,
+        gap: Int = 12,
+        side: Int = PAGE_X,
+    ): GridSpec {
+        val avail = (screenWidthDp - side * 2).coerceAtLeast(minPosterW + gap)
+        val cols = ((avail + gap) / (minPosterW + gap)).coerceIn(2, 8)
+        val w = (avail - (cols - 1) * gap) / cols
+        return GridSpec(cols, w, (w * POSTER_RATIO).toInt(), gap)
+    }
 
     fun dp(ctx: Context, v: Int) = (v * ctx.resources.displayMetrics.density).toInt()
 

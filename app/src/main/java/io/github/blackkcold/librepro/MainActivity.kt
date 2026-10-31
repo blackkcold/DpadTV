@@ -85,6 +85,12 @@ class MainActivity : Activity() {
     private var currentScreen = "setup"
     /** 详情页是从哪一屏进来的：BACK 要回到原处（筛选/片单/历史），不是一律回首页 */
     private var detailOrigin = ""
+    /** 搜索是从哪一屏发起的：结果页 BACK 要回原处，而不是一律回搜索页 */
+    private var searchOrigin = "home"
+    /** 浏览页/片单页的实例：从详情回来时复用，筛选条件与滚动位置都还在 */
+    private var browseScreen: BrowseScreen? = null
+    private var browseShelf: Shelf? = null
+    private var libraryScreen: LibraryScreen? = null
     /** 换肤重画用：详情页入参缓存，避免用户改主题就丢片 */
     private var lastDetailItem: SearchItem? = null
     private var lastDetailData: Detail? = null
@@ -496,16 +502,27 @@ class MainActivity : Activity() {
         return super.onKeyDown(keyCode, event)
     }
 
+    /** 结果页 / 搜索页的 BACK：回到**发起搜索的那一屏**（旧版一律回搜索页，用户回不到货架） */
+    private fun returnFromSearch() {
+        when (searchOrigin) {
+            "shelves" -> showShelves()
+            "browse" -> lastShelf?.let { openShelf(it) } ?: showShelves()
+            "library" -> showLibrary()
+            "history" -> showHistoryCards()
+            else -> showHome()
+        }
+    }
+
     /**
      * BACK 的层级回退：详情/片源/设置/直播 都退回上一层，
      * 只有最外层（推荐首页）才真的退出。以前任何界面按返回都直接杀掉应用。
      */
-    @Suppress("DEPRECATION")
+    @Suppress("DEPRECATION", "OVERRIDE_DEPRECATION")
     override fun onBackPressed() {
         when (currentScreen) {
             "files" -> showSources()
             "qradd" -> { qrServer?.stop(); qrServer = null; showSources() }
-            "results" -> showHome()
+            "results" -> returnFromSearch()
             "serversettings" -> showSetup()
             "detail" -> leaveDetail()
             "live", "setup", "history" -> showRecommend()
@@ -545,6 +562,9 @@ class MainActivity : Activity() {
     /* ------------------------------------------------------------ 通用小工具 */
 
     private fun dp(v: Int) = (v * resources.displayMetrics.density).toInt()
+
+    /** 只认 scheme://host:port —— 用来判断「是不是换了另一个服务器」 */
+    private fun originOf(url: String): String = url.trim().trimEnd('/').lowercase()
 
     private fun setScreen(view: View, focusFirst: Boolean = true) {
         root.removeAllViews()
@@ -820,18 +840,22 @@ class MainActivity : Activity() {
             } catch (e: Exception) {
                 dismissProgress()
                 val msg = describe(e)
-                // 以前失败只弹一个一秒就消失的 toast，网络抖动时用户会以为「点了没反应」
+                // 限流时不给「重试」：文案写着等 10 分钟，按钮却让人立刻再打一次，只会更糟
+                val limited = e is HttpError && e.status == 429
                 dlg()
                     .setTitle("请求失败")
                     .setMessage(msg)
-                    .setPositiveButton("重试") { _, _ -> runApi(loading, block, then) }
-                    .setNegativeButton("取消", null)
+                    .setPositiveButton(if (limited) "知道了" else "重试") { _, _ ->
+                        if (!limited) runApi(loading, block, then)
+                    }
+                    .setNegativeButton(if (limited) null else "取消", null)
                     .show()
             }
         }
     }
 
     private fun describe(e: Exception): String = when (e) {
+        is ConnectError -> e.message ?: "连接失败"
         is HttpError -> {
             // 服务端的 error 文案比 "HTTP 403" 有用得多（例如防 SSRF 的说明）
             val serverMsg = try {
@@ -890,6 +914,11 @@ class MainActivity : Activity() {
                 withContext(Dispatchers.IO) {
                     val first = api.status()
                     val st = if (first.passwordRequired && !first.verified) api.login(prefs.password) else first
+                    // 登录返回成功也可能会话没生效：这里必须复查 verified，
+                    // 否则用户会以为「已连接」，直到真的去搜索才失败
+                    if (st.passwordRequired && !st.verified) {
+                        throw ConnectError("访问密码没有通过验证，请到「设置 → 修改服务器设置」重新填写")
+                    }
                     // 服务端还可能下发 DEFAULT_SUBSCRIPTIONS（订阅链接），需要再解析一次；
                     // 解析失败（例如内网地址被防 SSRF 拦掉）不影响其它通道
                     val subSources = if (prefs.sources().isEmpty() && st.defaultSources.isEmpty()) {
@@ -1191,6 +1220,8 @@ class MainActivity : Activity() {
      * 同时保留已知的新版本标记，不因一次断网就把提示抹掉。
      */
     private fun maybeCheckUpdate() {
+        // 开关就是开关：关掉之后连检查请求都不发（旧版只隐藏胶囊，照旧每 6 小时敲一次 GitHub）
+        if (!prefs.updateBannerEnabled) return
         val now = System.currentTimeMillis()
         if (now - prefs.lastUpdateCheck < 6 * 3600_000L) return
         UpdateChecker.check { info ->
@@ -1414,8 +1445,10 @@ class MainActivity : Activity() {
         val progress = prefs.progressCount()
         val diskMb = PlaybackCache.sizeBytes(this) / 1024.0 / 1024.0
         val diskText = String.format(java.util.Locale.US, "%.1f MB", diskMb)
-        val msg = "图片缓存：$imgs 张\n观看历史：$hist 条\n搜索记录：$search 条\n" +
-            "播放进度：$progress 条\n播放缓存（磁盘）：$diskText\n\n片源配置、直播源和服务器设置不会被清除。"
+        val msg = "图片缓存：$imgs 张（内存）\n观看历史：$hist 条\n搜索记录：$search 条\n" +
+            "播放进度：$progress 条\n\n" +
+            "播放缓存（磁盘 $diskText）不在这里清 —— 见「播放缓存」\n" +
+            "片源配置、直播源和服务器设置不会被清除。"
         dlg()
             .setTitle("清理缓存")
             .setMessage(msg)
@@ -1539,11 +1572,12 @@ class MainActivity : Activity() {
         )))
         col.addView(settingGroup("播放", listOf(
             "播放设置" to { showPlaySettings() },
+            "播放缓存" to { showClearPlaybackCache() },
             "清理缓存" to { showClearCache() },
         )))
         col.addView(settingGroup("系统", listOf(
             "首页按钮排序" to { showHomeBarSettings() },
-            ("更新提示：" + if (prefs.updateBannerEnabled) "开" else "关") to {
+            ("自动检查更新：" + if (prefs.updateBannerEnabled) "开" else "关") to {
                 prefs.updateBannerEnabled = !prefs.updateBannerEnabled
                 showSetup()
             },
@@ -1621,8 +1655,14 @@ class MainActivity : Activity() {
 
         val urlField = field(BuildConfig.DEFAULT_URL, prefs.serverUrl.ifEmpty { BuildConfig.DEFAULT_URL })
         col.addView(urlField)
-        // 密码默认值同样来自构建参数：自用包可以预填，发版包为空（DEFAULT_PASSWORD 恒空）
-        val pwdField = field("访问密码", prefs.password.ifEmpty { BuildConfig.DEFAULT_PASSWORD }, password = true)
+        // 密码只在「同一个服务器」时预填。换了地址还默认带上旧密码，等于把 A 的口令递给 B
+        val typedUrl = urlField.text.toString().trim().ifEmpty { BuildConfig.DEFAULT_URL }
+        val prefillPwd = if (prefs.serverUrl.isEmpty() || originOf(prefs.serverUrl) == originOf(typedUrl)) {
+            prefs.password.ifEmpty { BuildConfig.DEFAULT_PASSWORD }
+        } else {
+            ""
+        }
+        val pwdField = field("访问密码", prefillPwd, password = true)
         col.addView(pwdField)
 
         val statusLine = TextView(this).apply {
@@ -1636,13 +1676,14 @@ class MainActivity : Activity() {
         val bar = LinearLayout(this).apply { orientation = LinearLayout.HORIZONTAL }
         bar.addView(button("连接并登录", primary = true) {
             val url = urlField.text.toString().trim()
-            val pwd = pwdField.text.toString().ifEmpty { BuildConfig.DEFAULT_PASSWORD }
+            val pwd = pwdField.text.toString()
             if (url.isEmpty()) {
                 toast("请填服务器地址")
                 return@button
             }
             api = Api(url)
-            api.restoreCookie(prefs.cookie)
+            // 只恢复**这个服务器自己的**会话：换地址就没有可复用的 Cookie（旧版会把 A 的发给 B）
+            api.restoreCookie(prefs.cookieFor(url))
             imageLoader = ImageLoader(api)
             runApi("正在连接…", {
                 val st = api.status()
@@ -1653,10 +1694,21 @@ class MainActivity : Activity() {
                 }
                 Triple(st, verified, pwd)
             }, { (st, verified, pw) ->
+                if (st.passwordRequired && !verified) {
+                    // 认证没通过就不算连上：不写地址、不写密码、不进首页
+                    dlg()
+                        .setTitle("登录未生效")
+                        .setMessage("服务器要求密码，但这次没有通过验证。\n请检查访问密码后重试。")
+                        .setPositiveButton("好", null)
+                        .show()
+                    return@runApi
+                }
+                val switched = prefs.serverUrl.isNotEmpty() && originOf(prefs.serverUrl) != originOf(url)
                 prefs.serverUrl = url
                 prefs.password = pw
-                api.currentCookie()?.let { prefs.cookie = it }
-                toast(if (verified) "已连接 v${st.version}" else "已连接，但登录未生效")
+                api.currentCookie()?.let { prefs.setCookieFor(url, it) }
+                if (switched) toast("已切换到 $url")
+                toast("已连接 v${st.version}")
                 seedFromServer(st)
                 showSetup()
             })
@@ -2074,15 +2126,18 @@ class MainActivity : Activity() {
         val server = QrAddServer(this, 8765) { text ->
             val list = api.parseSourceList(text)
             if (list.isEmpty()) throw IllegalArgumentException("no sources")
-            prefs.addSources(list)
+            // 返回**实际新增**条数：以前返回 list.size，重复导入也会说「已导入 N 个」
+            val added = prefs.addSources(list)
             val live = api.parseLiveFromExport(text)
+            var liveAdded = 0
             if (live.isNotEmpty()) {
                 val cur = prefs.liveUrls()
-                live.forEach { if (!cur.contains(it)) cur.add(it) }
+                live.forEach { if (!cur.contains(it)) { cur.add(it); liveAdded++ } }
                 prefs.saveLiveUrls(cur)
                 if (prefs.activeLiveUrl.isEmpty()) prefs.activeLiveUrl = cur.first()
             }
-            list.size
+            val totalNew = added + liveAdded
+            totalNew
         }
         qrServer = if (server.start()) server else null
         val url = server.url
@@ -2401,7 +2456,7 @@ class MainActivity : Activity() {
                 }
                 .show()
         })
-        bar.addView(button("‹ 返回搜索") { showHome() })
+        bar.addView(button("‹ 返回") { returnFromSearch() })
         col.addView(hScroll(bar))
 
         if (sourceFilter.isNotEmpty()) {
@@ -2543,12 +2598,14 @@ class MainActivity : Activity() {
 
         val header = LinearLayout(this).apply { orientation = LinearLayout.HORIZONTAL }
         col.addView(brandRow(false))
-        val keywordField = field("输入影片名称…").apply {
+        val keywordField = field("输入影片名称…", lastKeyword).apply {
             // 横屏单行输入框会被输入法切成「全屏提取模式」，整页被白底键盘盖住；
-            // 明确告诉 IME 不要走提取模式，输入时还能看见页面上下的热门/历史
-            imeOptions = imeOptions or android.view.inputmethod.EditorInfo.IME_FLAG_NO_EXTRACT_UI
+            // 明确告诉 IME 不要走提取模式，输入时还能看见页面上下的热门/历史。
+            // 注意要用 `or` 合并：下一行曾把 imeOptions 整体覆盖掉，标志等于白设。
+            imeOptions = imeOptions or
+                android.view.inputmethod.EditorInfo.IME_FLAG_NO_EXTRACT_UI or
+                EditorInfo.IME_ACTION_SEARCH
         }
-        keywordField.imeOptions = EditorInfo.IME_ACTION_SEARCH
         header.addView(keywordField, LinearLayout.LayoutParams(dp(580), dp(48)))
         header.addView(button("搜索", primary = true) { doSearch(keywordField.text.toString()) })
         header.addView(button("清空历史") { prefs.clearSearchHistory(); showHome() })
@@ -2670,6 +2727,8 @@ class MainActivity : Activity() {
         wantYear = year
         val kw = keyword.trim()
         if (kw.isEmpty()) { toast("请输入片名"); return }
+        // 记住「这一跳是从哪儿发起的」：货架/浏览/片单点海报后，结果页要能回得去
+        if (currentScreen != "results" && currentScreen != "detail") searchOrigin = currentScreen
         lastKeyword = kw
         val sources = prefs.sources().filter { it.enabled }
         if (sources.isEmpty()) { toast("没有启用的片源，去「片源管理」开启或添加"); showSources(); return }
@@ -2688,7 +2747,7 @@ class MainActivity : Activity() {
             val failedNote = if (result.failures > 0) "（${result.failures} 个源无响应）" else ""
             if (result.items.isEmpty()) {
                 toast("没有找到结果$failedNote，换个片名或别的源试试")
-                showHome()
+                returnFromSearch()
             } else {
                 toast("找到 ${result.items.size} 个结果$failedNote")
                 showResults()
@@ -3342,20 +3401,45 @@ class MainActivity : Activity() {
     /** 我的片单：收藏/想看/在看/看过/弃剧 */
     private fun showLibrary() {
         currentScreen = "library"
-        setScreen(
-            LibraryScreen(this, imageLoader, library, onOpenTitle = { doSearch(it.title, it.year) }, onBack = { showShelves() }).build(),
+        val existing = libraryScreen
+        if (existing != null) {
+            // 复用实例：从详情/播放器回来时回到原来的抽屉和滚动位置
+            setScreen(existing.view(), focusFirst = false)
+            existing.refresh()
+            existing.requestGridFocus()
+            existing.restoreScroll()
+            return
+        }
+        val screen = LibraryScreen(
+            this, imageLoader, library,
+            onOpenTitle = { doSearch(it.title, it.year) },
+            onBack = { showShelves() },
         )
+        libraryScreen = screen
+        setScreen(screen.build())
     }
 
     /** 「查看更多」：把这一行的合并结果铺成网格 */
     private fun openShelf(shelf: Shelf) {
         currentScreen = "browse"
         lastShelf = shelf
+        val existing = browseScreen
+        if (existing != null && browseShelf?.id == shelf.id) {
+            // 复用实例：筛选条件、已加载的页、滚动位置都不丢（以前会 new 一个新的，回到第一页）
+            setScreen(existing.view(), focusFirst = false)
+            existing.requestGridFocus()
+            existing.restoreScroll()
+            return
+        }
+        existing?.cancel()
         // 立即进页面，由 BrowseScreen 自己按 base 取第一页：
         // 以前先 await 4 个榜的 fetch 才 setScreen，慢网下「查看更多」像没反应。
-        setScreen(
-            BrowseScreen(this@MainActivity, imageLoader, repo, library, shelf, { showShelves() }) { doSearch(it.title, it.year) }.build(),
-        )
+        val screen = BrowseScreen(
+            this@MainActivity, imageLoader, repo, library, shelf, { showShelves() },
+        ) { doSearch(it.title, it.year) }
+        browseScreen = screen
+        browseShelf = shelf
+        setScreen(screen.build())
     }
 
     private fun showRecommend() {
@@ -3565,3 +3649,6 @@ class MainActivity : Activity() {
             }
         }
 }
+
+/** 连接阶段的「配置/认证」错误：describe() 原样显示，不加「网络失败」前缀 */
+private class ConnectError(message: String) : Exception(message)

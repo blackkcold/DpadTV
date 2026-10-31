@@ -378,11 +378,7 @@ class PlayerActivity : Activity() {
                         // 「换源」只在真的带着备选地址进来时才存在（整季播放传的是集数，不是源）。
                         // 这里给一个用户按得到的事实说明，别让他对着「按返回键换源」按不出东西。
                         val hint = if (urls.size > 1) "按返回键回上一页换一集/换源" else "按返回键退出后重新搜索"
-                        val msg = if (error.errorCodeName.contains("DECODER", true)) {
-                            "解码失败：这个片源可能是 H.265 / 不支持的编码 · $hint"
-                        } else {
-                            "播放失败：${error.errorCodeName} · $hint"
-                        }
+                        val msg = "播放失败：${friendlyError(error)} · $hint"
                         hasError = true
                         baseText = msg
                         titleText.text = msg
@@ -532,6 +528,19 @@ class PlayerActivity : Activity() {
         handler.postDelayed(hideActions, HIDE_ACTIONS_DELAY_MS)
     }
 
+    /** 播放器错误码 → 人话。电视上不该出现 ERROR_CODE_IO_BAD_HTTP_STATUS 这种字符串 */
+    private fun friendlyError(e: PlaybackException): String {
+        val n = e.errorCodeName
+        return when {
+            n.contains("DECODER", true) -> "这个片源的编码（可能是 H.265）本机解不了，换个源试试"
+            n.contains("TIMEOUT", true) -> "片源响应太慢，连接超时"
+            n.contains("BAD_HTTP_STATUS", true) -> "片源服务器拒绝了请求，地址可能已失效"
+            n.contains("PARSING", true) || n.contains("CONTAINER", true) -> "片源格式无法解析"
+            n.contains("IO", true) -> "网络中断，片源地址可能已失效"
+            else -> "播放器打不开这个地址"
+        }
+    }
+
     private fun actionButton(label: String, onClick: () -> Unit): TextView = TextView(this).apply {
         text = label
         setTextColor(Theme.ON_IMAGE_INK)
@@ -541,16 +550,13 @@ class PlayerActivity : Activity() {
             setColor(Theme.PLAYER_TRACK)
             cornerRadius = dp(8).toFloat()
         }
-        // 和全站一致：焦点只加亮色描边，不换填充色（蓝底在暗场景里太跳）
-        val focused = android.graphics.drawable.GradientDrawable().apply {
-            setColor(Theme.PLAYER_TRACK)
-            cornerRadius = dp(8).toFloat()
-            setStroke(dp(3), Theme.PLAYER_PROGRESS)
-        }
+        // 和全站一致：焦点走**双环**（accent + 对向 halo）。单色描边压在亮画面上会隐形
         background = normal
         isFocusable = true
         isFocusableInTouchMode = false
-        setOnFocusChangeListener { v, has -> v.background = if (has) focused else normal }
+        setOnFocusChangeListener { v, has ->
+            v.background = if (has) Theme.focusRing(this@PlayerActivity, Theme.RADIUS, base = Theme.PLAYER_TRACK) else normal
+        }
         setOnClickListener { onClick() }
         val lp = LinearLayout.LayoutParams(
             LinearLayout.LayoutParams.WRAP_CONTENT,

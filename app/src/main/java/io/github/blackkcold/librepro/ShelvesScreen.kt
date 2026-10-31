@@ -81,8 +81,17 @@ class ShelvesScreen(
             setBackgroundColor(Theme.BG)
             addView(col)
         }
+        rootScroll = root
         root.postDelayed({
-            rows.firstOrNull()?.strip?.getChildAt(0)?.requestFocus()
+            if (!autoFocused) {
+                val lib = libraryStrip?.getChildAt(0)?.takeIf { it.isFocusable }
+                val fallback = lib ?: rows.firstOrNull()?.strip?.getChildAt(0)?.takeIf { it.isFocusable }
+                if (fallback != null) {
+                    autoFocused = true
+                    if (!fallback.hasFocus()) fallback.requestFocus()
+                }
+            }
+            root.scrollTo(0, 0)
         }, 260)
         return root
     }
@@ -208,6 +217,7 @@ class ShelvesScreen(
             orientation = LinearLayout.HORIZONTAL
             setPadding(0, dp(2), 0, 0)
         }
+        libraryStrip = strip
         entries.forEach { e -> strip.addView(posterCell(e.toItem(), dominantBadge = "", stateBadge = true)) }
         if (entries.size < 4) {
             strip.addView(TextView(host).apply {
@@ -270,7 +280,9 @@ class ShelvesScreen(
      * 否则亮底上会出现一条脏灰边），导航和标题都压在图上的暗幕里。
      */
     private fun heroBlock(): View {
-        val h = (host.resources.displayMetrics.heightPixels * 0.40f).toInt()
+        // 40% 在 1080p 上会把「第一个分区 + 一行海报」顶出首屏（只剩 hero 和一行），
+        // 34% 能同时露出 hero、分区标题和整整一行海报 —— 首屏信息量翻倍
+        val h = (host.resources.displayMetrics.heightPixels * 0.34f).toInt()
         val frame = FrameLayout(host).apply {
             layoutParams = LinearLayout.LayoutParams(ViewGroup.LayoutParams.MATCH_PARENT, h)
             // 图没到之前也必须是"一块幕布"，不能是黑洞（网络慢时用户先看到的就是这块）
@@ -399,10 +411,17 @@ class ShelvesScreen(
 
     private val rows = ArrayList<Row>()
 
+    /** 首屏顶部这块滚动容器：抢焦点后要把它按回顶部，别让 hero 被滚走 */
+    private var rootScroll: ScrollView? = null
+
+    /** 我的片单行的内容条：有它时，首焦点应该落在这一行（它是视觉上的第一行） */
+    private var libraryStrip: LinearLayout? = null
+
     private fun render(row: Row, merged: List<MovieItem>) {
         row.strip.removeAllViews()
         if (merged.isEmpty()) {
-            row.count.text = "稍后自动重试"
+            // 「稍后自动重试」是句假话：这条路径没有定时器，只有用户点才会联网
+            row.count.text = "本地没有"
             row.strip.addView(retryCell(row.shelf, row.strip, row.count))
             return
         }
@@ -411,7 +430,32 @@ class ShelvesScreen(
         merged.forEach { row.strip.addView(posterCell(it, dominant)) }
         if (heroTitle?.text.isNullOrEmpty()) merged.firstOrNull()?.let { setHero(it) }
         row.strip.addView(endCell(row.shelf))
+        claimFirstFocus(row)
     }
+
+    /**
+     * 首页初始焦点：**第一行渲染出来的那一刻**交给第一张海报。
+     *
+     * 旧做法是 build() 里 postDelayed(260ms) 找第一格 —— 那时网格还是不可聚焦的骨架，
+     * 请求必然落空，焦点停在顶部导航上，用户还以为遥控器没反应。
+     * 这里只在「第一次真正填出海报」时抢一次，之后不动用户的焦点。
+     */
+    private fun claimFirstFocus(row: Row) {
+        if (autoFocused) return
+        // 「我的片单」有内容时它就是视觉上的第一行：优先给它。
+        // 直接抢第二行会把 ScrollView 顶下去 —— hero 被滚出屏幕，首屏只剩半行海报。
+        val lib = libraryStrip?.getChildAt(0)?.takeIf { it.isFocusable }
+        val target = lib ?: run {
+            if (row !== rows.firstOrNull()) return
+            row.strip.getChildAt(0)?.takeIf { it.isFocusable } ?: return
+        }
+        autoFocused = true
+        if (!target.hasFocus()) target.requestFocus()
+        // 焦点定了再把滚动条按回顶部：hero 必须在首屏
+        rootScroll?.post { rootScroll?.scrollTo(0, 0) }
+    }
+
+    private var autoFocused = false
 
     private fun shelfSection(shelf: Shelf): View {
         val box = LinearLayout(host).apply {
@@ -426,7 +470,8 @@ class ShelvesScreen(
         }
         head.addView(TextView(host).apply {
             text = shelf.title
-            setTextSize(Theme.LABEL)
+            // 分区标题必须压过元信息（13sp），否则「电影 / 剧集 / 综艺」和角标同级，远距离扫不出来
+            setTextSize(15f)
             setTextColor(muted)
             letterSpacing = 0.08f
         })
@@ -497,6 +542,16 @@ class ShelvesScreen(
             setBackgroundColor(Theme.POSTER_BG)
         }
         frame.addView(img)
+        // 图没来 / 加载失败时的兜底：片名首字（断网时整面墙仍是可辨认的，而不是一片灰）
+        val mark = TextView(host).apply {
+            layoutParams = FrameLayout.LayoutParams(
+                ViewGroup.LayoutParams.MATCH_PARENT, ViewGroup.LayoutParams.MATCH_PARENT)
+            gravity = Gravity.CENTER
+            setTextColor(muted)
+            alpha = 0.45f
+            setTextSize(Theme.HERO)
+        }
+        frame.addView(mark)
         if (item.badge.isNotEmpty() && (stateBadge || item.badge != dominantBadge)) {
             frame.addView(TextView(host).apply {
                 text = item.badge
@@ -539,9 +594,15 @@ class ShelvesScreen(
 
         if (item.cover.isNotEmpty()) {
             img.tag = item.cover
+            mark.text = item.title.take(1)
             loader.load(item.cover, dp(160), dp(220)) { bmp ->
-                if (img.tag == item.cover && bmp != null) img.setImageBitmap(bmp)
+                if (img.tag == item.cover && bmp != null) {
+                    img.setImageBitmap(bmp)
+                    mark.text = ""
+                }
             }
+        } else {
+            mark.text = item.title.take(1)
         }
         return cell
     }

@@ -1,0 +1,14 @@
+<?xml version="1.0" encoding="utf-8"?>
+<!--
+    服务器地址 / 访问密码 / 会话 Cookie / 观看与搜索历史都在 dpadtv_native.xml 里。
+    这些不属于「换机应该带走」的数据：带上就等于把凭据搬到了另一台设备。
+    allowBackup=false 已经关掉了云备份，这里再显式排除一次，防止个别 ROM 忽略 allowBackup。
+-->
+<data-extraction-rules>
+    <cloud-backup>
+        <exclude domain="sharedpref" path="dpadtv_native.xml" />
+    </cloud-backup>
+    <device-transfer>
+        <exclude domain="sharedpref" path="dpadtv_native.xml" />
+    </device-transfer>
+</data-extraction-rules>

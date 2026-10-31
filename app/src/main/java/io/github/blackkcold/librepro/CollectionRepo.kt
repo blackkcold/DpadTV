@@ -63,6 +63,15 @@ class CollectionRepo(private val ctx: Context) {
 
     fun indexBuiltAt(): String = runCatching { index.builtAt }.getOrDefault("")
 
+    /** 索引距今多少天（解析不出来返回 -1）：过期了 UI 要敢说 */
+    fun indexAgeDays(): Long = runCatching {
+        val d = index.builtAt
+        if (d.isEmpty()) return@runCatching -1L
+        val t = java.text.SimpleDateFormat("yyyy-MM-dd", java.util.Locale.US).parse(d)?.time
+            ?: return@runCatching -1L
+        (System.currentTimeMillis() - t) / 86_400_000L
+    }.getOrDefault(-1L)
+
     /** 启动时在后台把索引解析掉，避免第一次查询在主线程解 52KB gzip（审计 R10） */
     fun warmUp() {
         runCatching { index.itemCount }
@@ -93,7 +102,7 @@ class CollectionRepo(private val ctx: Context) {
         }
         val net = networkFor(ref, ttlMs, out)
         if (net.isNotEmpty()) {
-            publish(out, "network")
+            publish(out, out.source.ifEmpty { "network" })
             return@withContext net
         }
         // 联网失败：本地近似也比空屏强
@@ -113,14 +122,20 @@ class CollectionRepo(private val ctx: Context) {
         allowNetwork: Boolean = true,
     ): List<MovieItem> = withContext(Dispatchers.IO) {
         val out = Outcome()
-        val local = index.query(q.tags, q.year, q.minRate, q.start, PAGE)
+        val local = index.query(q.tags, q.year, q.minRate, q.start, PAGE, q.sort)
         if (local.size >= LOCAL_ENOUGH || !allowNetwork) {
             publish(out, if (local.isNotEmpty()) "index" else "")
             return@withContext local
         }
         val url = DoubanUrls.search(q)
         val net = cached("q_" + md5(url), ttlMs, out) { request(url, out)?.let { parseNewSearch(it) } ?: emptyList() }
-        publish(out, if (net.isNotEmpty()) "network" else if (local.isNotEmpty()) "index" else "")
+        // 来源要诚实：缓存命中不是「联网刷新」（旧版统一标 network，等于骗用户）
+        val src = when {
+            net.isNotEmpty() -> out.source.ifEmpty { "network" }
+            local.isNotEmpty() -> "index"
+            else -> ""
+        }
+        publish(out, src)
         if (net.isNotEmpty()) net else local
     }
 
@@ -200,8 +215,10 @@ class CollectionRepo(private val ctx: Context) {
         }
 
         when {
-            resp.code == 403 || resp.code == 418 ||
+            resp.code == 403 || resp.code == 418 || resp.code == 429 ||
                 resp.body.contains("检测到有异常请求") || resp.body.contains("\"r\":1") -> {
+                // 429 也是限流，而且**优先听服务端的 Retry-After**：
+                // 以前 429 落进「普通服务器错误」只冷却 60s，文案却写「等 10 分钟」，自相矛盾
                 val backoff = throttle.onRateLimited(System.currentTimeMillis(), resp.retryAfter)
                 out.failure = FetchFailure.RATE_LIMITED
                 Log.w("LibreProNet", "触发风控（HTTP ${resp.code}，第 ${throttle.strikes()} 次），退避 ${backoff / 60_000} 分钟")
@@ -240,14 +257,19 @@ class CollectionRepo(private val ctx: Context) {
         out: Outcome,
         block: suspend () -> List<MovieItem>,
     ): List<MovieItem> {
-        if (ttlMs > 0) readCache(key, ttlMs)?.let { return it }
+        if (ttlMs > 0) readCache(key, ttlMs)?.let {
+            out.source = "cache"      // 命中缓存 ≠ 联网，状态栏要分开写
+            return it
+        }
         val items = block()
         if (items.isNotEmpty()) {
             writeCache(key, items)
             return items
         }
         // 拉不到（限流/断网/缓存未预热）：用过期的旧缓存兜底，总比空屏好
-        return readCache(key, ttlMs = Long.MAX_VALUE).orEmpty()
+        return readCache(key, ttlMs = Long.MAX_VALUE).orEmpty().also {
+            if (it.isNotEmpty()) out.source = "cache"
+        }
     }
 
     // ---------- 网络 ----------

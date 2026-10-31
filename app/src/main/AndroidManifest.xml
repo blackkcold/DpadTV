@@ -13,9 +13,12 @@
     <!-- 声明为「非必需」：个别电视 ROM 的特性表不全，若标成必需会被判设备不兼容、装不上 -->
     <uses-feature android:name="android.hardware.screen.landscape" android:required="false" />
 
+    <!-- 凭据（服务器地址/密码/会话 Cookie）不进系统备份，也不随换机迁移 -->
     <application
         android:name=".DpadApp"
-        android:allowBackup="true"
+        android:allowBackup="false"
+        android:dataExtractionRules="@xml/data_extraction_rules"
+        android:fullBackupContent="@xml/backup_rules"
         android:banner="@drawable/app_banner"
         android:icon="@mipmap/ic_launcher"
         android:label="${appName}"

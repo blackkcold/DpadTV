@@ -8,6 +8,7 @@ import android.view.Gravity
 import android.view.View
 import android.view.ViewGroup
 import android.widget.BaseAdapter
+import android.widget.FrameLayout
 import android.widget.GridView
 import android.widget.HorizontalScrollView
 import android.widget.ImageView
@@ -37,11 +38,19 @@ class LibraryScreen(
     private var filter: LibState? = null
     private val items = ArrayList<LibEntry>()
 
+    /** 网格列宽按屏宽算（见 Theme.gridSpec）：固定 6 列在 960dp 宽的电视上会裁海报 */
+    private val spec: GridSpec by lazy {
+        val dm = host.resources.displayMetrics
+        Theme.gridSpec((dm.widthPixels / dm.density).toInt())
+    }
+
     private lateinit var grid: GridView
     private lateinit var adapter: BaseAdapter
     private lateinit var chipsRow: LinearLayout
     private lateinit var status: TextView
     private lateinit var empty: TextView
+    private var root: View? = null
+    private var scrollPos = 0
 
     private fun dp(v: Int) = (v * host.resources.displayMetrics.density).toInt()
 
@@ -97,8 +106,8 @@ class LibraryScreen(
 
         adapter = cellAdapter()
         grid = GridView(host).apply {
-            numColumns = 6
-            horizontalSpacing = dp(12)
+            numColumns = spec.columns
+            horizontalSpacing = dp(spec.gap)
             verticalSpacing = dp(10)
             setPadding(0, dp(10), 0, 0)
             isFocusable = true
@@ -108,6 +117,7 @@ class LibraryScreen(
             setSelector(android.graphics.drawable.InsetDrawable(Theme.focusRing(host, Theme.RADIUS), dp(2)))
             this.adapter = this@LibraryScreen.adapter
             setOnItemClickListener { _, _, pos, _ ->
+                scrollPos = grid.firstVisiblePosition
                 items.getOrNull(pos)?.let { onOpenTitle(it.toItem()) }
             }
         }
@@ -117,7 +127,26 @@ class LibraryScreen(
         reload()
         // 子项不可聚焦后，必须显式把焦点交给网格
         grid.postDelayed({ if (!grid.hasFocus()) grid.requestFocus() }, 260)
+        root = col
         return col
+    }
+
+    /** 从详情页回来时复用同一个实例：抽屉选择、滚动位置都还在 */
+    fun view(): View = root ?: build()
+
+    /** 复用时刷新数据（用户可能在别的页面改过收藏状态） */
+    fun refresh() {
+        renderChips()
+        reload()
+    }
+
+    fun restoreScroll() {
+        if (scrollPos > 0) grid.post { grid.setSelection(scrollPos) }
+    }
+
+    /** 复用实例重新上屏后，焦点必须回到网格 */
+    fun requestGridFocus() {
+        grid.post { if (!grid.hasFocus()) grid.requestFocus() }
     }
 
     private fun renderChips() {
@@ -172,11 +201,7 @@ class LibraryScreen(
                 // 与详情页选集网格统一：子项不抢焦点，由 GridView 持焦 + 双环 selector
                 isFocusable = false
                 isFocusableInTouchMode = false
-                addView(ImageView(host).apply {
-                    layoutParams = LinearLayout.LayoutParams(dp(146), dp(204))
-                    scaleType = ImageView.ScaleType.CENTER_CROP
-                    setBackgroundColor(Theme.POSTER_BG)
-                })
+                addView(posterFrame(), LinearLayout.LayoutParams(dp(spec.posterW), dp(spec.posterH)))
                 addView(TextView(host).apply {
                     setTextSize(Theme.CAPTION); setTextColor(ink); maxLines = 1
                     ellipsize = android.text.TextUtils.TruncateAt.END
@@ -188,19 +213,44 @@ class LibraryScreen(
                 })
             }
             val e = items[position]
-            val img = cell.getChildAt(0) as ImageView
+            bindPoster(cell.getChildAt(0) as FrameLayout, e)
             (cell.getChildAt(1) as TextView).text = e.title
             (cell.getChildAt(2) as TextView).text = e.state.label
-            img.tag = e.cover
-            img.setImageBitmap(null)
-            if (e.cover.isNotEmpty()) {
-                loader.load(e.cover, dp(160), dp(220)) { bmp ->
-                    if (img.tag == e.cover && bmp != null) img.setImageBitmap(bmp)
-                }
-            }
             val item = e.toItem()
             PosterActions.attach(host, cell, item, store) { renderChips(); reload() }
             return cell
+        }
+    }
+
+    /** 海报框：图没来 / 加载失败时显示片名首字，断网时整页仍可辨认 */
+    private fun posterFrame(): FrameLayout = FrameLayout(host).apply {
+        background = Theme.rounded(host, Theme.POSTER_BG, Theme.RADIUS)
+        addView(ImageView(host).apply {
+            layoutParams = FrameLayout.LayoutParams(ViewGroup.LayoutParams.MATCH_PARENT, ViewGroup.LayoutParams.MATCH_PARENT)
+            scaleType = ImageView.ScaleType.CENTER_CROP
+            setBackgroundColor(Theme.POSTER_BG)
+        })
+        addView(TextView(host).apply {
+            layoutParams = FrameLayout.LayoutParams(ViewGroup.LayoutParams.MATCH_PARENT, ViewGroup.LayoutParams.MATCH_PARENT)
+            gravity = Gravity.CENTER
+            setTextColor(muted)
+            alpha = 0.45f
+            setTextSize(Theme.HERO)
+        })
+    }
+
+    private fun bindPoster(frame: FrameLayout, e: LibEntry) {
+        val img = frame.getChildAt(0) as ImageView
+        val mark = frame.getChildAt(1) as TextView
+        mark.text = e.title.take(1)
+        img.tag = e.cover
+        img.setImageBitmap(null)
+        if (e.cover.isEmpty()) return
+        loader.load(e.cover, dp(spec.posterW), dp(spec.posterH)) { bmp ->
+            if (img.tag == e.cover && bmp != null) {
+                img.setImageBitmap(bmp)
+                mark.text = ""
+            }
         }
     }
 

@@ -27,10 +27,16 @@ class QrAddServer(
 ) {
     private var serverSocket: ServerSocket? = null
 
+    /**
+     * 一次性口令：二维码里带着它，`/save` 必须原样带回。
+     * 没有它，同一局域网里任何人都能往这台电视写片源（页面本身没有登录态）。
+     */
+    private val token: String = java.util.UUID.randomUUID().toString().replace("-", "").take(12)
+
     @Volatile
     private var running = false
 
-    val url: String get() = "http://${localIp()}:$port"
+    val url: String get() = "http://${localIp()}:$port/?t=$token"
 
     /** 当前活动网络的 IPv4 地址；取不到时退回遍历网卡，再退回 127.0.0.1 */
     fun localIp(): String {
@@ -108,7 +114,10 @@ class QrAddServer(
             socket.soTimeout = 15_000
             val reader = BufferedReader(InputStreamReader(socket.getInputStream(), Charsets.UTF_8))
             val requestLine = reader.readLine() ?: return
-            val path = requestLine.split(' ').getOrNull(1) ?: "/"
+            val target = requestLine.split(' ').getOrNull(1) ?: "/"
+            val path = target.substringBefore('?')
+            val query = target.substringAfter('?', "")
+            val authed = query.split('&').any { it == "t=$token" }
             var contentLength = 0
             while (true) {
                 val line = reader.readLine() ?: break
@@ -120,8 +129,12 @@ class QrAddServer(
             val out = socket.getOutputStream()
             when {
                 path.startsWith("/save") -> {
+                    if (!authed) {
+                        respond(out, "链接已失效：请在电视上重新打开扫码页，扫新的二维码")
+                        return
+                    }
                     if (contentLength <= 0 || contentLength > 2 * 1024 * 1024) {
-                        respond(out, "内容为空或过大（上限 2 MB）")
+                        respond(out, "内容为空或过大（上限 2 MB）", retry = true)
                         return
                     }
                     val body = readBody(reader, contentLength)
@@ -132,16 +145,21 @@ class QrAddServer(
                     } catch (e: Exception) {
                         -1
                     }
-                    respond(
-                        out,
-                        if (count >= 0) {
-                            "已导入 $count 个片源，可以关掉本页了"
+                    if (count >= 0) {
+                        // 导入成功就收工：这是一次性通道，没必要继续在局域网里开着
+                        val done = if (count == 0) {
+                            "这些片源已经在列表里了，没有新增"
                         } else {
-                            "解析失败：请确认内容是一份 sources.json 或 M3U"
-                        },
-                    )
+                            "已导入 $count 个片源，可以关掉本页了"
+                        }
+                        respond(out, done)
+                        stop()
+                    } else {
+                        respond(out, "解析失败：请确认内容是一份 sources.json 或 M3U", retry = true)
+                    }
                 }
-                else -> respondHtml(out, page())
+                authed -> respondHtml(out, page())
+                else -> respond(out, "二维码已失效：请在电视上重新打开扫码页")
             }
         }
     }
@@ -157,13 +175,17 @@ class QrAddServer(
         return String(buf, 0, read)
     }
 
-    private fun respond(out: OutputStream, message: String) {
+    private fun respond(out: OutputStream, message: String, retry: Boolean = false) {
+        val back = if (retry) {
+            "<p><a style='color:#38bdf8;text-decoration:none' href='/?t=$token'>← 返回再传一次</a></p>"
+        } else {
+            ""
+        }
         respondHtml(
             out,
             "<!doctype html><meta charset=utf-8><meta name=viewport content='width=device-width'>" +
                 "<body style='font:17px/1.7 system-ui;padding:28px;background:#0b101a;color:#e5e7eb'>" +
-                "<h2 style='margin:0 0 12px'>$message</h2>" +
-                "<p><a style='color:#38bdf8;text-decoration:none' href='/'>← 返回再传一个</a></p></body>",
+                "<h2 style='margin:0 0 12px'>$message</h2>$back</body>",
         )
     }
 
@@ -193,7 +215,7 @@ class QrAddServer(
 </label>
 <div id="hint" style="color:#64748b;font-size:14px;margin:0 0 14px;text-align:center"></div>
 
-<form method="post" action="/save">
+<form method="post" action="/save?t=$token">
   <textarea name="text" id="text" rows="12" style="width:100%;box-sizing:border-box;padding:12px;
     border-radius:10px;border:1px solid #334155;background:#111827;color:#e5e7eb;
     font:14px/1.5 ui-monospace,monospace"

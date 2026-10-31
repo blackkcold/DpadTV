@@ -112,4 +112,33 @@ class LocalIndexTest {
         // 唐人街探案自带 year=2025，也在这批里 —— 字段命中与标签命中是「或」的关系
         assertEquals(listOf("寄生虫", "告白", "唐人街探案"), got.map { it.title })
     }
+
+    /* ---------------- 排序与翻页稳定性（浏览页「划不动」的回归测试） ---------------- */
+
+    @Test
+    fun sort_latest_orders_by_year_desc_then_rating() {
+        val got = IndexCore.query(idsByTag, items, listOf("电影"), null, 0.0, 0, 10, null, Sort.LATEST)
+        // 2025 → 2024 → 无年份（无年份内部按评分降序）
+        assertEquals(listOf("唐人街探案", "沙丘2", "千与千寻", "寄生虫", "告白"), got.map { it.title })
+    }
+
+    @Test
+    fun sort_hot_is_stable_across_pages() {
+        // 分页必须「整页拼起来 == 一次取全」，否则翻页会重复或漏项
+        val all = IndexCore.query(idsByTag, items, listOf("电影"), null, 0.0, 0, 10, null, Sort.HOT)
+        val paged = (0 until 3).flatMap { p ->
+            IndexCore.query(idsByTag, items, listOf("电影"), null, 0.0, p * 2, 2, null, Sort.HOT)
+        }
+        assertEquals(all.map { it.title }, paged.map { it.title })
+        assertEquals(all.size, all.map { it.title }.distinct().size)
+    }
+
+    @Test
+    fun equal_ratings_have_total_order() {
+        // 同分条目必须有稳定的次级排序（片名），否则第 2 页可能和第 1 页重叠
+        val tied = mapOf("1" to item("B片", 8.0), "2" to item("A片", 8.0), "3" to item("C片", 8.0))
+        val tag = mapOf("电影" to listOf("1", "2", "3"))
+        val all = IndexCore.query(tag, tied, listOf("电影"), null, 0.0, 0, 10)
+        assertEquals(listOf("A片", "B片", "C片"), all.map { it.title })
+    }
 }
